@@ -51,6 +51,13 @@
       "owner_role": "qa-engineer",
       "status": "pending",
       "rework_iteration_count": 0
+    },
+    {
+      "id": "T-07",
+      "task": "Implementasi modul rekap ekspor Excel multi-tab (Journaling Finansial) dan Live Paper-Marking Engine",
+      "owner_role": "backend-engineer",
+      "status": "pending",
+      "rework_iteration_count": 0
     }
   ],
   "established_constraints": [

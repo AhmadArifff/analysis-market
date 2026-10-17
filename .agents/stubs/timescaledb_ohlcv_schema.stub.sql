@@ -71,11 +71,14 @@ CREATE INDEX IF NOT EXISTS idx_anl_liq_pool_active
 ON anl_liq_pool (asset_id, tf, status) 
 WHERE status = 'PENDING';
 
--- 5. Jurnal Hasil Backtest (Trade Logs)
+-- 5. Jurnal Hasil Backtest & Live Paper Trading (Trade Logs)
 CREATE TABLE IF NOT EXISTS bt_trade_log (
     trade_id BIGSERIAL PRIMARY KEY,
     asset_id INT NOT NULL REFERENCES mst_asset(asset_id) ON DELETE CASCADE,
     pool_id BIGINT REFERENCES anl_liq_pool(pool_id),
+    is_paper_trading BOOLEAN DEFAULT FALSE,   -- TRUE = Live Forward Marking, FALSE = Historical Backtest
+    confluence_score INT NOT NULL DEFAULT 0,  -- Skor gabungan saat entry (0 - 100 Poin)
+    setup_type VARCHAR(32) NOT NULL DEFAULT 'COMPOSITE_SWEEP',
     macro_bias VARCHAR(10) NOT NULL,          -- Bias 1M/1W saat entry ('BULLISH' / 'BEARISH')
     daily_bar_cnt INT NOT NULL,               -- Bar ke-berapa di 1D saat sinyal muncul (misal: bar ke-4)
     side VARCHAR(5) NOT NULL,                 -- 'LONG' atau 'SHORT'
@@ -87,11 +90,16 @@ CREATE TABLE IF NOT EXISTS bt_trade_log (
     exit_px NUMERIC(18, 8),
     fees_paid NUMERIC(18, 8) DEFAULT 0,
     pnl_pct NUMERIC(8, 2),                    -- Persentase profit/loss bersih setelah dikurangi spread
-    result VARCHAR(10)                        -- 'WIN', 'LOSS', 'BREAKEVEN'
+    result VARCHAR(10),                       -- 'WIN', 'LOSS', 'BREAKEVEN', 'OPEN'
+    active_modules JSONB,                     -- Indikator yang aktif
+    notes TEXT                                -- Catatan analisis untuk jurnal trading
 );
 
 CREATE INDEX IF NOT EXISTS idx_bt_trade_log_asset 
 ON bt_trade_log (asset_id, entry_time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_bt_trade_log_paper 
+ON bt_trade_log (is_paper_trading, entry_time DESC);
 
 -- 6. Kebijakan Kompresi TimescaleDB (Otomatis kompres data mkt_ohlcv > 30 hari)
 ALTER TABLE mkt_ohlcv SET (

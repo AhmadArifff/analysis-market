@@ -13,6 +13,10 @@
 4. **Konfirmasi Liquidity Sweep**: Pembeda antara *real breakout* dan *fakeout sweep* menggunakan Relative Volume ($RVOL \ge 2.0\times$), Rejection Wick Ratio ($\ge 30\%$), serta *Open Interest (OI) Plunge* pada derivatif kripto.
 5. **Confluence Scoring System (0–100 Poin)**: Menghasilkan notifikasi eksekusi probabilitas tinggi HANYA ketika skor gabungan mencapai $\ge 80$ poin.
 6. **Zero Look-Ahead Bias Backtester**: Simulasi transaksi kausal tanpa bias intip masa depan dengan kalkulasi friksi pasar riil (spread, dynamic slippage, dan exchange taker fees).
+7. **Modular Multi-Indicator Backtesting**: Kemampuan menguji komponen strategi secara terpisah (Liquidity Sweep murni vs Exhaustion vs Trend) untuk comparative A/B testing.
+8. **Live Forward-Testing & Chart Marking Mode ("Paper Trading")**: Pengujian real-time pada data berjalan dengan penanda visual (virtual entry, SL, TP) tanpa risiko finansial nyata.
+9. **Predictive Liquidity Horizon Forecasting**: Peramalan arah pergerakan harga 1D/1W berbasis gravitasi daya tarik likuiditas Buy-Side vs Sell-Side.
+10. **Automated Excel Export & Trading Journal (.xlsx)**: Rekap 1-klik riwayat transaksi ke dalam spreadsheet Excel 4-sheet terformat lengkap (KPI Summary, Detailed Journal, Confluence Attribution, dan Monthly Matrix).
 
 ---
 

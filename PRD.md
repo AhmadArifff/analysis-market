@@ -248,6 +248,42 @@ stateDiagram-v2
 
 ---
 
+### 3.5 Empat Pilar Utama Analisis Kuantitatif Lanjutan (*Proper Analysis Engine*)
+
+Untuk memastikan sistem ini menjadi platform analitik yang komprehensif, profesional, dan dapat diandalkan:
+
+#### 1. Modular Multi-Indicator Backtesting Engine
+Sistem tidak hanya menguji strategi komposit tunggal, tetapi juga menyediakan **fitur modular backtesting** di mana pengguna dapat mengisolasi dan membandingkan performa masing-masing indikator secara mandiri (*A/B Testing*):
+- **Test Mode A (Pure Liquidity Sweep)**: Menguji hanya sinyal penjemputan Stop Loss fraktal tanpa filter tren mingguan (melihat efektivitas murni pola sweep).
+- **Test Mode B (Pure 5-Bar ATR Exhaustion & RSI-5)**: Menguji hanya pembalikan arah saat candle menyentuh 4–5 bar dan RSI-5 oversold/overbought.
+- **Test Mode C (Trend Momentum EMA 21/50 + ADX)**: Menguji strategi breakout searah tren makro.
+- **Test Mode D (Composite Confluence Score $\ge 80$)**: Menggabungkan seluruh indikator dan melihat lonjakan *Winrate* serta *Profit Factor* dibanding mode tunggal.
+- **Comparative Attribution Matrix**: Grafik perbandingan visual yang membuktikan secara data mengapa gabungan indikator menghasilkan *drawdown* yang jauh lebih kecil daripada indikator tunggal.
+
+#### 2. Live Forward-Testing & Chart Marking Mode ("Test Real Tanpa Resiko Finansial")
+Bagi pengguna yang ingin menguji sistem pada data pasar *live* berjalan tanpa mengeksekusi order riil ke broker:
+- **Zero-Risk Ghost Execution**: Begitu kondisi pasar memenuhi kriteria di data tick/candle live, sistem otomatis memunculkan **penanda visual (*Visual Marking*)** langsung di atas chart TradingView:
+  - Garis horizontal hijau putus-putus untuk *Virtual Entry*.
+  - Garis merah tebal untuk *Calculated Stop Loss*.
+  - Garis biru terang untuk *Target Take Profit*.
+- **Live Paper-Trade Tracker**: Sistem melacak pergerakan candle menit-demi-menit secara otomatis dan mencatat hasilnya di background apakah *virtual trade* tersebut sukses menyentuh TP atau SL, tanpa menyentuh saldo rekening pengguna sepeser pun.
+
+#### 3. Predictive Forecasting & Horizon Liquidity Engine ("Prediksi Arah Pergerakan")
+Sistem tidak hanya bereaksi terhadap masa lalu, melainkan memproyeksikan probabilitas pergerakan arah berikutnya:
+- **Liquidity Magnet Gravity Index**: Algoritma menghitung rasio daya tarik likuiditas:
+  $$\text{Gravity Index} = \frac{\text{Volume Pool}_{BSL} / \text{Distance}_{BSL}}{\text{Volume Pool}_{SSL} / \text{Distance}_{SSL}}$$
+  Memberikan kesimpulan prediktif: *"Probabilitas 73% pergerakan 1–3 hari ke depan akan tersedot mengejar Buy-Side Liquidity di level $XAUUSD 2,675.00 sebelum pembalikan arah terjadi"*.
+- **Projected Trajectory Channel**: Menampilkan kerucut proyeksi arah pergerakan harga (*cone of probability*) di atas grafik berdasarkan riwayat volatilitas ATR 14.
+
+#### 4. Automated Excel Export & Institutional Trading Journal (`.xlsx`)
+Setiap hasil simulasi backtest maupun riwayat penandaan *live paper-trading* dapat diunduh dalam **1-Klik ke file spreadsheet Excel (.xlsx)** yang diformat secara elegan dengan 4 lembar kerja (*multi-tab workbook*):
+1. **Sheet 1 — Executive Summary Dashboard**: Ringkasan metrik finansial (Total Return, Winrate %, Profit Factor, Max Drawdown %, Sharpe Ratio, Expectancy per Trade).
+2. **Sheet 2 — Detailed Trade Journal**: Jurnal detail setiap transaksi (Trade ID, Asset, Timeframe, Side, Timestamp Entry & Exit, Setup Type, Confluence Score, Entry Price, SL, TP, PnL %, Net Profit $, Status WIN/LOSS, Alasan Keluar).
+3. **Sheet 3 — Confluence Attribution Analysis**: Tabel korelasi statistik yang menunjukkan persentase kemenangan berdasarkan rentang Confluence Score (misal: Score 80–85 = Winrate 68%, Score 86–100 = Winrate 79%).
+4. **Sheet 4 — Monthly Performance Matrix**: Matriks performa return bulanan (Januari s.d Desember) untuk melihat konsistensi profitabilitas dari tahun ke tahun.
+
+---
+
 ## 4. Arsitektur Tech Stack Sistem Web
 
 Arsitektur aplikasi dibangun dengan memisahkan engine komputasi kuantitatif berkecepatan tinggi di backend dan antarmuka interaktif responsif di frontend:
@@ -350,12 +386,15 @@ CREATE INDEX IF NOT EXISTS idx_anl_liq_pool_active
 ON anl_liq_pool (asset_id, tf, status) 
 WHERE status = 'PENDING';
 
--- 5. Jurnal Hasil Backtest (bt_trade_log)
--- Mencatat setiap simulasi transaksi untuk dihitung Winrate, Profit Factor, & Drawdown
+-- 5. Jurnal Hasil Backtest & Live Paper Trading (bt_trade_log)
+-- Mencatat setiap transaksi historis maupun live forward-test (marking) untuk jurnal & export Excel
 CREATE TABLE IF NOT EXISTS bt_trade_log (
     trade_id BIGSERIAL PRIMARY KEY,
     asset_id INT NOT NULL REFERENCES mst_asset(asset_id) ON DELETE CASCADE,
     pool_id BIGINT REFERENCES anl_liq_pool(pool_id),
+    is_paper_trading BOOLEAN DEFAULT FALSE,   -- TRUE = Live Forward Marking, FALSE = Historical Backtest
+    confluence_score INT NOT NULL DEFAULT 0,  -- Skor gabungan saat entry (0 - 100 Poin)
+    setup_type VARCHAR(32) NOT NULL,          -- 'LIQUIDITY_SWEEP', 'EXHAUSTION_REVERSAL', 'COMPOSITE'
     macro_bias VARCHAR(10) NOT NULL,          -- Bias 1M/1W saat entry ('BULLISH' / 'BEARISH')
     daily_bar_cnt INT NOT NULL,               -- Bar ke-berapa di 1D saat sinyal muncul (misal: bar ke-4)
     side VARCHAR(5) NOT NULL,                 -- 'LONG' atau 'SHORT'
@@ -367,11 +406,16 @@ CREATE TABLE IF NOT EXISTS bt_trade_log (
     exit_px NUMERIC(18,8),
     fees_paid NUMERIC(18,8) DEFAULT 0,
     pnl_pct NUMERIC(8,2),                     -- Persentase profit/loss bersih setelah dikurangi spread
-    result VARCHAR(10)                        -- 'WIN', 'LOSS', 'BREAKEVEN'
+    result VARCHAR(10),                       -- 'WIN', 'LOSS', 'BREAKEVEN', 'OPEN' (untuk live paper)
+    active_modules JSONB,                     -- Komponen indikator yang aktif saat sinyal terpicu
+    notes TEXT                                -- Catatan evaluasi untuk jurnal trading
 );
 
 CREATE INDEX IF NOT EXISTS idx_bt_trade_log_asset 
 ON bt_trade_log (asset_id, entry_time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_bt_trade_log_paper 
+ON bt_trade_log (is_paper_trading, entry_time DESC);
 
 -- Kebijakan Kompresi TimescaleDB (Otomatis kompresi mkt_ohlcv > 30 hari)
 ALTER TABLE mkt_ohlcv SET (
