@@ -22,67 +22,72 @@
 
 ## 🛠️ Tech Stack & Arsitektur
 
-- **Quant Engine & Backend**: Python 3.11+, FastAPI, VectorBT / Backtesting.py, Pandas, NumPy, Numba.
-- **Data Ingestion**: CCXT (Binance / Bybit REST & WebSocket), MetaTrader 5 (MT5 Python API) / TwelveData / Oanda.
-- **Time-Series Database**: PostgreSQL 16 + TimescaleDB (Hypertables untuk OHLCV multi-timeframe 1m s.d 1M dengan kebijakan kompresi otomatis).
-- **Frontend UI & Visualization**: Next.js 15 (App Router, React 19, TypeScript), Tailwind CSS, TradingView Lightweight Charts (v5) dengan custom Canvas overlays.
+- **Unified Full-Stack Framework**: Next.js 15 (App Router, React 19, TypeScript), Node.js V8 High-Performance Runtime.
+- **Quant Calculation Engine**: Algoritma deterministik TypeScript murni (`src/lib/quant-engine/`): Wilder ATR(14), Fast RSI(5), EMA(21, 50), ADX(14), Fraktal 5-Bar Williams, dan Confluence Scoring.
+- **Data Ingestion**: `ccxt` resmi Node.js/TypeScript (Binance, Bybit REST & WebSocket) & Oanda / MetaTrader.
+- **Reporting & Journaling**: `exceljs` untuk streaming download spreadsheet `.xlsx` 4-sheet terformat lengkap.
+- **Frontend UI & Visualization**: Tailwind CSS, TradingView Lightweight Charts (v5) dengan custom Canvas overlays, Lucide Icons.
 
 ---
 
-## 📂 Struktur Monorepo Proyek
+## 📂 Struktur Unified Pure Monorepo
 
-Proyek ini dibangun menggunakan arsitektur **Monorepo** yang memisahkan backend FastAPI dan frontend Next.js secara rapi dalam satu repositori:
+Proyek ini menggunakan arsitektur **Unified Pure Monorepo** (100% Next.js Full-Stack) di mana antarmuka, API endpoint, engine kuantitatif, dan generator excel berada dalam satu kesatuan utuh yang terpadu:
 
 ```
 Analysis-Market/
-├── backend/                  # REST & WebSocket API, Quant Engine & Excel Exporter
+├── src/
 │   ├── app/
-│   │   ├── api/              # Endpoint routes (/watchlist, /analysis/current, /backtest, /export-excel)
-│   │   ├── services/         # ExcelJournalExporter (OpenPyXL multi-sheet)
-│   │   └── main.py           # FastAPI Application Entry Point
-│   ├── venv/                 # Python Virtual Environment
-│   └── requirements.txt      # FastAPI, Pandas, CCXT, OpenPyXL, Uvicorn
-├── frontend/                 # Quantitative Institutional Terminal UI
-│   ├── src/
-│   │   ├── app/              # Next.js App Router (page.tsx, layout.tsx, globals.css)
-│   │   └── components/       # LightweightChart (TradingView v5), Liquidity Overlays
-│   ├── package.json          # Next 16, React 19, Tailwind CSS, Lightweight Charts, Lucide
-│   └── tsconfig.json
-├── .agents/                  # Autonomous Multi-Agent Governance & Knowledge Base
-│   ├── rules/                # Core Guardrails, Database Standards & Workflow Discipline
-│   ├── stubs/                # Reusable Boilerplate Stubs (TimescaleDB SQL, Quant Sweep Algorithm)
-│   └── session-state.json    # Single Source of Truth Session Memory
-├── AGENTS.md                 # Quantitative System Governance & Locked Constraints
-├── PRD.md                    # Comprehensive Product Requirements Document (38KB+)
-├── setup.bat                 # 1-Klik Setup Otomatis (Python venv + Pip + NPM Install)
-├── run.bat                   # 1-Klik Jalankan Sistem (FastAPI + Next.js + Buka Browser Otomatis)
-└── stop.bat                  # 1-Klik Matikan Seluruh Layanan (Port 8000 & 3000 Clean Exit)
+│   │   ├── api/
+│   │   │   ├── market/
+│   │   │   │   ├── watchlist/route.ts       # Endpoint live watchlist, ATR & 5-bar status
+│   │   │   │   └── analysis/route.ts        # Endpoint MTF regime, liquidity pools & signals
+│   │   │   └── backtest/
+│   │   │       ├── run/route.ts             # Endpoint simulasi backtest kuantitatif
+│   │   │       └── export-excel/route.ts    # Streaming download jurnal Excel (.xlsx)
+│   │   ├── globals.css                      # Stealth Institutional Minimalist design tokens
+│   │   ├── layout.tsx                       # Root layout & dark institutional metadata
+│   │   └── page.tsx                         # Quantitative Terminal Dashboard UI
+│   ├── components/
+│   │   └── LightweightChart.tsx             # TradingView v5 Canvas + Active Liquidity Pools Overlay
+│   └── lib/
+│       ├── quant-engine/
+│       │   ├── indicators.ts                # Rumus ATR, EMA, ADX, RSI, Fraktal Williams
+│       │   ├── exhaustion.ts                # Dynamic ATR 3-5 Bar Exhaustion Protocol
+│       │   ├── liquidity.ts                 # Retail RR Traps & Rejection Wick Sweep Detection
+│       │   └── confluence.ts                # Confluence Scoring Engine (0-100 Pts, C-QUANT-07)
+│       └── excel-export/
+│           └── excelJournal.ts              # 4-Sheet Excel Trading Journal Generator (ExcelJS)
+├── public/                                  # Static brand assets
+├── .agents/                                 # Tata Kelola Multi-Agen, Rules, Session State & Stubs
+├── AGENTS.md                                # Batasan Domain Kuantitatif Terkunci
+├── PRD.md                                   # Product Requirements Document Komprehensif (38KB+)
+├── package.json                             # 1 File Manifest Dependensi Tunggal
+├── tsconfig.json                            # TypeScript Configuration
+├── setup.bat                                # 1-Klik Setup Otomatis (Hanya Node.js npm install)
+├── run.bat                                  # 1-Klik Jalankan Sistem (1 Terminal, Port 3000, Auto-Open Browser)
+└── stop.bat                                 # 1-Klik Matikan Layanan (Port 3000 Clean Exit)
 ```
 
 ---
 
 ## ⚡ Cara Menjalankan Sistem (1-Klik Tanpa Perlu Buka Terminal)
 
-Anda tidak perlu membuka terminal VS Code untuk menjalankan sistem ini. Cukup gunakan file batch yang telah disediakan:
+Anda tidak perlu membuka terminal VS Code atau mengetik perintah apapun. Cukup gunakan file batch yang telah disediakan:
 
 ### 1. Pertama Kali: Setup Lingkungan (Hanya Perlu Sekali)
 - **Klik ganda file `setup.bat`**
-- Skrip ini akan secara otomatis:
-  1. Memeriksa keberadaan Python dan Node.js.
-  2. Membuat *virtual environment* Python (`backend/venv`).
-  3. Menginstal seluruh pustaka backend (`FastAPI`, `Pandas`, `CCXT`, `OpenPyXL`).
-  4. Menjalankan `npm install` untuk frontend Next.js.
+- Skrip ini akan secara otomatis memeriksa instalasi Node.js dan menjalankan `npm install`.
 
 ### 2. Menjalankan Aplikasi Setiap Hari
 - **Klik ganda file `run.bat`**
 - Skrip ini akan:
-  1. Menjalankan Backend Engine di `http://localhost:8000`.
-  2. Menjalankan Frontend Web Terminal di `http://localhost:3000`.
-  3. Membuka browser default secara otomatis langsung ke antarmuka terminal.
+  1. Menjalankan server tunggal di `http://localhost:3000` dalam **hanya 1 jendela terminal**.
+  2. Menunggu 4 detik hingga server siap, lalu **otomatis membuka browser ke `http://localhost:3000`**.
 
-### 3. Menghentikan Seluruh Layanan
+### 3. Menghentikan Layanan
 - **Klik ganda file `stop.bat`**
-- Skrip ini akan mematikan proses di port 8000 dan port 3000 secara bersih tanpa meninggalkan *zombie process*.
+- Skrip ini akan mematikan proses di port 3000 secara bersih tanpa meninggalkan *zombie process*.
 
 ---
 

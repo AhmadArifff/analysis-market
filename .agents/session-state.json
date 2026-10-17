@@ -3,10 +3,10 @@
   "primary_goal": "Sistem Web Market Analyst & Quantitative Backtester untuk Forex (XAUUSD) dan Crypto (BTC, ETH, BNB, SOL, DOGE, PEPE) berbasis Multi-Timeframe Analysis (MTF), Dynamic Volatility Time-Bar Exhaustion (ATR), dan Retail Liquidity Sweep (Risk-Reward Traps)",
   "current_stage": "PRD_AND_GOVERNANCE_ADOPTION",
   "active_subtask": {
-    "id": "T-03",
-    "task": "Implementasi engine kuantitatif Python (ATR Dynamic Exhaustion, Retail RR Liquidity Sweep, State Machine)",
-    "owner_role": "quant-engineer",
-    "status": "pending",
+    "id": "T-05",
+    "task": "Migrasi arsitektur ke Unified Pure Monorepo (Next.js 15 Full-Stack TypeScript + TradingView v5 + ExcelJS + CCXT)",
+    "owner_role": "frontend-engineer",
+    "status": "done",
     "rework_iteration_count": 0
   },
   "subtasks": [

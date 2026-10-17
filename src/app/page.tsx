@@ -229,7 +229,7 @@ export default function TerminalHome() {
     setIsExporting(true);
     setExportNotice(null);
     try {
-      const response = await fetch("http://localhost:8000/api/v1/backtest/export-excel");
+      const response = await fetch("/api/backtest/export-excel");
       if (!response.ok) {
         throw new Error(`Server returned ${response.status}`);
       }
@@ -244,8 +244,7 @@ export default function TerminalHome() {
       window.URL.revokeObjectURL(url);
       setExportNotice("Jurnal Excel berhasil diekspor!");
     } catch (err) {
-      // Fallback message if backend isn't running yet
-      setExportNotice("Unduhan Excel: Pastikan backend FastAPI :8000 aktif.");
+      setExportNotice("Gagal mengunduh Jurnal Excel.");
     } finally {
       setIsExporting(false);
       setTimeout(() => setExportNotice(null), 5000);

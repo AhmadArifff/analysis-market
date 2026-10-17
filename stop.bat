@@ -1,20 +1,14 @@
 @echo off
 setlocal enabledelayedexpansion
-title Analysis-Market - Stop All Services
+title Analysis-Market - Stop Service
 color 0C
 
 echo ======================================================================
-echo          ANALYSIS-MARKET : STOPPING ALL LOCAL SERVICES
+echo          ANALYSIS-MARKET : STOPPING LOCAL SERVICES
 echo ======================================================================
 echo.
 
-echo Menghentikan Backend FastAPI (Port 8000)...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000" ^| findstr "LISTENING"') do (
-    echo   - Menutup process PID %%a
-    taskkill /F /PID %%a >nul 2>&1
-)
-
-echo Menghentikan Frontend Next.js (Port 3000)...
+echo Menghentikan Terminal Engine di Port 3000...
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3000" ^| findstr "LISTENING"') do (
     echo   - Menutup process PID %%a
     taskkill /F /PID %%a >nul 2>&1
@@ -22,7 +16,7 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":3000" ^| findstr "LISTENING
 
 echo.
 echo ======================================================================
-echo [SELESAI] Seluruh port 8000 dan 3000 telah dinonaktifkan dengan aman.
+echo [SELESAI] Layanan Port 3000 telah dinonaktifkan dengan aman.
 echo ======================================================================
 echo.
 timeout /t 2 >nul
