@@ -1,0 +1,133 @@
+{
+  "project_name": "Analysis-Market",
+  "primary_goal": "Sistem Web Market Analyst & Quantitative Backtester untuk Forex (XAUUSD) dan Crypto (BTC, ETH, BNB, SOL, DOGE, PEPE) berbasis Multi-Timeframe Analysis (MTF), Dynamic Volatility Time-Bar Exhaustion (ATR), dan Retail Liquidity Sweep (Risk-Reward Traps)",
+  "current_stage": "PRD_AND_GOVERNANCE_ADOPTION",
+  "active_subtask": {
+    "id": "T-03",
+    "task": "Implementasi engine kuantitatif Python (ATR Dynamic Exhaustion, Retail RR Liquidity Sweep, State Machine)",
+    "owner_role": "quant-engineer",
+    "status": "pending",
+    "rework_iteration_count": 0
+  },
+  "subtasks": [
+    {
+      "id": "T-01",
+      "task": "Inisialisasi tata kelola .agents, kalibrasi kuantitatif, dan penyusunan PRD komprehensif",
+      "owner_role": "problem-decomposer",
+      "status": "done",
+      "rework_iteration_count": 0
+    },
+    {
+      "id": "T-02",
+      "task": "Perancangan skema database TimescaleDB (mst_asset, mkt_ohlcv, anl_liq_pool, bt_trade_log)",
+      "owner_role": "backend-engineer",
+      "status": "done",
+      "rework_iteration_count": 0
+    },
+    {
+      "id": "T-03",
+      "task": "Implementasi engine kuantitatif Python (ATR Dynamic Exhaustion, Retail RR Liquidity Sweep, State Machine)",
+      "owner_role": "quant-engineer",
+      "status": "pending",
+      "rework_iteration_count": 0
+    },
+    {
+      "id": "T-04",
+      "task": "Pipeline integrasi ingestion data real-time & historis (CCXT Binance/Bybit + MetaTrader 5 / TwelveData)",
+      "owner_role": "backend-engineer",
+      "status": "pending",
+      "rework_iteration_count": 0
+    },
+    {
+      "id": "T-05",
+      "task": "Antarmuka web dashboard Next.js + TradingView Lightweight Charts dengan custom overlay Liquidity Pools & Signals",
+      "owner_role": "frontend-engineer",
+      "status": "pending",
+      "rework_iteration_count": 0
+    },
+    {
+      "id": "T-06",
+      "task": "Pengujian Backtest E2E, eliminasi Look-Ahead Bias, dan validasi Walk-Forward",
+      "owner_role": "qa-engineer",
+      "status": "pending",
+      "rework_iteration_count": 0
+    }
+  ],
+  "established_constraints": [
+    {
+      "id": "C-01",
+      "category": "security",
+      "constraint": "Dilarang hardcode kredensial rahasia (API Exchange, private keys, MT5/Oanda broker accounts) ke repositori kode",
+      "locked": true
+    },
+    {
+      "id": "C-02",
+      "category": "quality",
+      "constraint": "Wajib menerapkan evaluasi 7 pilar task review dan prinsip No Self-Review antar peran",
+      "locked": true
+    },
+    {
+      "id": "C-QUANT-01",
+      "category": "quant_engine",
+      "constraint": "Anti Look-Ahead Bias: Backtest multi-timeframe wajib mengisolasi bar candle yang belum tutup (closed candle timestamp strict slicing)",
+      "locked": true
+    },
+    {
+      "id": "C-QUANT-02",
+      "category": "quant_engine",
+      "constraint": "Dynamic Volatility: Dilarang menggunakan persentase kenaikan/penurunan statis (2%-5%); wajib menggunakan multiple ATR(14) dinamis antar kelas aset (XAUUSD vs BTC vs Alt/Meme Coins)",
+      "locked": true
+    },
+    {
+      "id": "C-QUANT-03",
+      "category": "quant_engine",
+      "constraint": "Exhaustion Zone Protocol: Kejenuhan 3-5 bar chart berturut-turut hanya berfungsi sebagai Alert Zone, BUKAN trigger counter-trend langsung. Entry mutlak menunggu konfirmasi Liquidity Sweep + MSS di lower timeframe (H1/H4)",
+      "locked": true
+    },
+    {
+      "id": "C-QUANT-04",
+      "category": "quant_engine",
+      "constraint": "Execution Friction Realism: Backtest wajib memperhitungkan spread, slippage dinamis, dan maker/taker commission fee",
+      "locked": true
+    },
+    {
+      "id": "C-QUANT-05",
+      "category": "quant_engine",
+      "constraint": "Session Killzones: Khusus instrumen Forex/XAUUSD, liquidity sweep wajib difilter berdasarkan sesi likuiditas tinggi (London 14:00-16:00 WIB & NY 19:00-22:00 WIB)",
+      "locked": true
+    },
+    {
+      "id": "C-QUANT-06",
+      "category": "quant_engine",
+      "constraint": "Crypto Derivatives Signals: Khusus instrumen Crypto, validasi liquidity sweep diperkuat dengan lonjakan Open Interest (OI) dan skew Funding Rate ekstrem",
+      "locked": true
+    },
+    {
+      "id": "C-QUANT-07",
+      "category": "quant_engine",
+      "constraint": "Confluence Scoring Protocol: Sinyal eksekusi (HIGH_PROBABILITY_SWEEP_ENTRY) wajib mencapai Confluence Score minimal 80/100 poin (EMA 21/50 + ADX, 3-5 Bar ATR + RSI-5, Retail RR, Pinbar RVOL >= 2.0x, dan OI drop / divergence)",
+      "locked": true
+    },
+    {
+      "id": "C-DB",
+      "category": "database",
+      "constraint": "Database Aktif: Menggunakan PostgreSQL 16 dengan TimescaleDB Hypertables untuk penyimpanan OHLCV multi-timeframe dan continuous aggregation",
+      "locked": true
+    },
+    {
+      "id": "C-ZERO-DIRECT-CRUD",
+      "category": "database",
+      "constraint": "Zero-Direct-CRUD: Dilarang eksekusi kueri mutasi langsung ke database produksi; agen wajib menyediakan query/skrip SQL DDL & DML terverifikasi",
+      "locked": true
+    }
+  ],
+  "open_questions": [],
+  "last_reviewer_verdict": {
+    "role": "tech-critic",
+    "result": "approved",
+    "note": "Koreksi parameter kuantitatif (ATR dinamis, Anti Look-Ahead Bias, Killzones, dan Retail RR Traps) telah dikunci dalam governance .agents."
+  },
+  "git_autopush_enabled": false,
+  "database": "postgres",
+  "architecture_standard": "clean"
+}
