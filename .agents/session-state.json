@@ -28,35 +28,35 @@
       "id": "T-03",
       "task": "Implementasi engine kuantitatif Python (ATR Dynamic Exhaustion, Retail RR Liquidity Sweep, State Machine)",
       "owner_role": "quant-engineer",
-      "status": "pending",
+      "status": "done",
       "rework_iteration_count": 0
     },
     {
       "id": "T-04",
       "task": "Pipeline integrasi ingestion data real-time & historis (CCXT Binance/Bybit + MetaTrader 5 / TwelveData)",
       "owner_role": "backend-engineer",
-      "status": "pending",
+      "status": "in_progress",
       "rework_iteration_count": 0
     },
     {
       "id": "T-05",
       "task": "Antarmuka web dashboard Next.js + TradingView Lightweight Charts dengan custom overlay Liquidity Pools & Signals",
       "owner_role": "frontend-engineer",
-      "status": "pending",
+      "status": "done",
       "rework_iteration_count": 0
     },
     {
       "id": "T-06",
       "task": "Pengujian Backtest E2E, eliminasi Look-Ahead Bias, dan validasi Walk-Forward",
       "owner_role": "qa-engineer",
-      "status": "pending",
+      "status": "in_progress",
       "rework_iteration_count": 0
     },
     {
       "id": "T-07",
       "task": "Implementasi modul rekap ekspor Excel multi-tab (Journaling Finansial) dan Live Paper-Marking Engine",
       "owner_role": "backend-engineer",
-      "status": "pending",
+      "status": "done",
       "rework_iteration_count": 0
     }
   ],

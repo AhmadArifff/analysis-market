@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-canvas: #090A0F;
+    --bg-surface: #111319;
+    --bg-surface-elevated: #181B24;
+    --border-subtle: #1F2430;
+    --border-focus: #333D52;
+    --text-primary: #E2E8F0;
+    --text-muted: #8E9BAE;
+    --accent-emerald: #10B981;
+    --accent-rose: #F43F5E;
+    --accent-amber: #D97706;
+    --accent-slate: #64748B;
+  }
+
+  body {
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    overflow-x: hidden;
+  }
+}
+
+/* Custom minimal scrollbar for institutional terminal look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #090A0F;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1F2430;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #333D52;
+}
+
+.font-mono-numbers {
+  font-feature-settings: "tnum" on, "lnum" on, "zero" on;
+}

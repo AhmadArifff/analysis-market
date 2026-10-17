@@ -25,7 +25,64 @@
 - **Quant Engine & Backend**: Python 3.11+, FastAPI, VectorBT / Backtesting.py, Pandas, NumPy, Numba.
 - **Data Ingestion**: CCXT (Binance / Bybit REST & WebSocket), MetaTrader 5 (MT5 Python API) / TwelveData / Oanda.
 - **Time-Series Database**: PostgreSQL 16 + TimescaleDB (Hypertables untuk OHLCV multi-timeframe 1m s.d 1M dengan kebijakan kompresi otomatis).
-- **Frontend UI & Visualization**: Next.js 15 (App Router, React 19, TypeScript), Tailwind CSS, TradingView Lightweight Charts (v4/v5) dengan custom Canvas overlays.
+- **Frontend UI & Visualization**: Next.js 15 (App Router, React 19, TypeScript), Tailwind CSS, TradingView Lightweight Charts (v5) dengan custom Canvas overlays.
+
+---
+
+## 📂 Struktur Monorepo Proyek
+
+Proyek ini dibangun menggunakan arsitektur **Monorepo** yang memisahkan backend FastAPI dan frontend Next.js secara rapi dalam satu repositori:
+
+```
+Analysis-Market/
+├── backend/                  # REST & WebSocket API, Quant Engine & Excel Exporter
+│   ├── app/
+│   │   ├── api/              # Endpoint routes (/watchlist, /analysis/current, /backtest, /export-excel)
+│   │   ├── services/         # ExcelJournalExporter (OpenPyXL multi-sheet)
+│   │   └── main.py           # FastAPI Application Entry Point
+│   ├── venv/                 # Python Virtual Environment
+│   └── requirements.txt      # FastAPI, Pandas, CCXT, OpenPyXL, Uvicorn
+├── frontend/                 # Quantitative Institutional Terminal UI
+│   ├── src/
+│   │   ├── app/              # Next.js App Router (page.tsx, layout.tsx, globals.css)
+│   │   └── components/       # LightweightChart (TradingView v5), Liquidity Overlays
+│   ├── package.json          # Next 16, React 19, Tailwind CSS, Lightweight Charts, Lucide
+│   └── tsconfig.json
+├── .agents/                  # Autonomous Multi-Agent Governance & Knowledge Base
+│   ├── rules/                # Core Guardrails, Database Standards & Workflow Discipline
+│   ├── stubs/                # Reusable Boilerplate Stubs (TimescaleDB SQL, Quant Sweep Algorithm)
+│   └── session-state.json    # Single Source of Truth Session Memory
+├── AGENTS.md                 # Quantitative System Governance & Locked Constraints
+├── PRD.md                    # Comprehensive Product Requirements Document (38KB+)
+├── setup.bat                 # 1-Klik Setup Otomatis (Python venv + Pip + NPM Install)
+├── run.bat                   # 1-Klik Jalankan Sistem (FastAPI + Next.js + Buka Browser Otomatis)
+└── stop.bat                  # 1-Klik Matikan Seluruh Layanan (Port 8000 & 3000 Clean Exit)
+```
+
+---
+
+## ⚡ Cara Menjalankan Sistem (1-Klik Tanpa Perlu Buka Terminal)
+
+Anda tidak perlu membuka terminal VS Code untuk menjalankan sistem ini. Cukup gunakan file batch yang telah disediakan:
+
+### 1. Pertama Kali: Setup Lingkungan (Hanya Perlu Sekali)
+- **Klik ganda file `setup.bat`**
+- Skrip ini akan secara otomatis:
+  1. Memeriksa keberadaan Python dan Node.js.
+  2. Membuat *virtual environment* Python (`backend/venv`).
+  3. Menginstal seluruh pustaka backend (`FastAPI`, `Pandas`, `CCXT`, `OpenPyXL`).
+  4. Menjalankan `npm install` untuk frontend Next.js.
+
+### 2. Menjalankan Aplikasi Setiap Hari
+- **Klik ganda file `run.bat`**
+- Skrip ini akan:
+  1. Menjalankan Backend Engine di `http://localhost:8000`.
+  2. Menjalankan Frontend Web Terminal di `http://localhost:3000`.
+  3. Membuka browser default secara otomatis langsung ke antarmuka terminal.
+
+### 3. Menghentikan Seluruh Layanan
+- **Klik ganda file `stop.bat`**
+- Skrip ini akan mematikan proses di port 8000 dan port 3000 secara bersih tanpa meninggalkan *zombie process*.
 
 ---
 
