@@ -520,33 +520,51 @@ Streaming real-time untuk update status candle dan alert penjemputan likuiditas:
 
 ## 7. Spesifikasi Antarmuka & Alur Interaksi Web (UI/UX)
 
-Ketika ditampilkan di halaman web dashboard:
+Sistem mengadopsi filosofi desain **"Stealth Institutional Minimalist"** (perpaduan estetika *Linear App*, *Raycast*, dan *Bloomberg Professional Terminal*) dengan standar monokrom charcoal gelap pekat, zero-emoji, dan tipografi tabular murni:
 
-### 1. Seleksi Aset & Header
-- Pengguna memilih instrumen (misal: **`SOLUSDT`**, **`BTCUSDT`**, atau **`XAUUSD`**).
-- Profil karakteristik aset dari tabel `mst_asset` otomatis termuat (`avg_daily_pct`, `max_bar_cycle`, dsb).
+### 1. Palet Warna Matte Institusional
+- **Canvas / Background Utama**: `#090A0F` (Charcoal Obsidian pekat bebas silau)
+- **Panel & Surface Card**: `#111319` (Slate Dark Matte)
+- **Garis Batas (Borders)**: `#202430` (1px ultra-crisp solid border)
+- **Tipografi Teks**:
+  - Teks Utama: `#F1F5F9` (Off-white / Slate 100)
+  - Teks Sekunder: `#94A3B8` (Muted Slate 400)
+  - Angka & Harga: `JetBrains Mono` (`tabular-nums`) untuk perataan vertikal digit finansial presisi.
+- **Warna Aksen Semantik**:
+  - Bullish / Profit: `#10B981` (Muted Emerald)
+  - Bearish / Loss: `#F43F5E` (Muted Rose)
+  - Liquidity Sweep / Alert: `#D97706` (Warm Matte Gold)
+  - Tanpa warna cyan/biru neon lebay, tanpa glow menyilaukan.
 
-### 2. Panel Siklus Tren & Progress Bar Harian
-- **Status Siklus Makro**: Menampilkan badge **Siklus 1 Bulan & 1 Minggu** (status: *Uptrend / Downtrend* berbasis EMA 20 dan struktur fraktal).
-- **Progress Bar Siklus Harian**:
-  - Menampilkan ringkasan status bar harian:
-    $$\text{"Saat ini Bar Hijau ke-4 dari maksimal 5 bar, kenaikan hari ini +3.2\% (Status: Siap Reversal / Alert Zone)"}$$
-  - Baris indikator visual berubah warna:
-    - Bar 1–3: Hijau/Biru (Normal Trend)
-    - Bar 4: Orange (Warning Exhaustion)
-    - Bar 5: Merah/Kuning Berkedip (Critical Alert - Standby Sweep)
+### 2. Standar Zero-Emoji & Precision Micro-Indicators
+- Dilarang keras menggunakan emoji di seluruh halaman aplikasi.
+- Status diwakili oleh **Micro-Dot 6px** (`w-1.5 h-1.5 rounded-full`) dan badge outline tipis.
+- Ikon menggunakan ikon vektor geometris monokrom dari Lucide Icons (seperti `Activity`, `FileSpreadsheet`, `Layers`).
 
-### 3. Tabel Target Liquidity Retail & Alert Real-time
-- **Tabel Peta Likuiditas (`anl_liq_pool`)**:
-  - Kolom: `Level Harga (Pool Px)`, `Tipe (BUY_SL / SELL_SL)`, `Est. Retail RR`, `Kelayakan (VALID / SKIP)`, `Status (PENDING / SWEPT)`.
-  - Area dengan $RR \ge 1.5$ diberi label **`VALID (Target Bandar)`**.
-  - Area dengan $RR < 1.0$ (risiko lebih besar daripada profit) diberi label abu-abu **`SKIP (Retail Tidak Masuk)`**.
-- **Notifikasi Penjemputan (*Swept Alert*)**:
-  - Begitu harga menyentuh $L_{pool}$ dan menolak (*wick rejection*), status di tabel berubah menjadi **`SWEPT (Terjemput)`** dengan highlight emas berkedip dan memunculkan tombol **"Entry Signal BUY/SELL"** lengkap dengan panduan Entry, SL di bawah ekor sweep, dan TP di swing resistance/support berikutnya.
-
-### 4. Chart Interaktif TradingView & Backtest Visualizer
-- **TradingView Lightweight Charts Panel**: Menampilkan candlestick dengan overlay kotak semi-transparan untuk area Stop Loss retail dan panah emas tebal tepat di candle penjemput (*sweep marker*).
-- **Backtest Scorecard & Trade Log**: Mengagregasikan data tabel `bt_trade_log` menjadi grafik pertumbuhan modal (*Equity Curve*), Winrate %, Profit Factor, dan Maximum Drawdown.
+### 3. Layout Workspace 3-Kolom Pro Trader
+1. **Header Bar (Tinggi 52px)**:
+   - Brand logo minimalis: `ANALYSIS-MARKET` (font-mono tracking-wider).
+   - Selector instrumen dengan badge kelas aset (`FOREX`, `MAJOR`, `MEME`).
+   - Indikator sesi pasar dunia: Titik 6px hijau untuk `London Session [Active]`.
+   - Mode Toggle: `Backtest Engine` | `Live Paper Test` dengan outline tipis.
+   - Tombol 1-klik `Export Excel (.xlsx)` flat monokrom.
+2. **Kolom Kiri — Market Radar & Screener Heatmap (280px)**:
+   - Daftar aset dengan pergerakan harga 24h, Confluence Score monokrom, dan indikator teks siklus bar harian (`XAUUSD: Bar 4/5 [Exhaustion Alert]`).
+3. **Kolom Tengah — Chart Interaktif TradingView Lightweight**:
+   - Header chart: Status tren makro format teks ringkas `1W: Bullish · 1D: Bar 4/5`.
+   - Kotak zona likuiditas retail: Opacity transparan 8% dengan garis putus-putus tipis 1px dan label monokrom kecil `BUY-SIDE LIQUIDITY · RR 1:1.85`.
+   - Penanda sweep: Sumbu candle ditandai panah emas matte kecil tanpa efek kartun.
+   - Garis virtual paper trading: Garis putus-putus tipis untuk Entry, SL di bawah ekor sweep, dan target TP.
+   - Footer chart: 5 segmen garis horizontal minimalis (`Progress: [■■■■□] Bar 4 of 5`) dan teks indikator gravitasi likuiditas (`Target Gravity favors Buy-Side: 74%`).
+4. **Kolom Kanan — Confluence Radar & Signal Card (340px)**:
+   - **Probability Gauge**: Cincin SVG monokrom tipis 3px dengan angka skor besar di tengah (`85`) dan label teks `High Probability Setup`.
+   - **Breakdown Poin**: Tabel mini poin konfluensi tanpa warna mencolok.
+   - **Tabel Active Retail Pools**: Daftar level harga Stop Loss retail dengan status badge outline `PENDING` atau `SWEPT`.
+   - **Signal Execution Card**: Kartu ringkasan eksekusi yang menampilkan Entry, SL, TP, dan potensi Risk:Reward rasio.
+5. **Drawer Bawah — Backtest Studio & Financial Journal (Collapsible)**:
+   - Tab 1: Grafik Equity Curve garis halus dan Scorecard metrik KPI (Win Rate, Profit Factor, Max Drawdown).
+   - Tab 2: Tabel jurnal transaksi historis dan live paper-test dengan pewarnaan teks semantik (Emerald untuk profit, Rose untuk rugi).
+   - Tab 3: Matriks komparasi A/B testing multi-indikator.
 
 ---
 

@@ -18,18 +18,20 @@
 
 ---
 
-## 2. Standar Desain Chart & Zero-Lag Rendering
+## 2. Standar Desain Chart & Zero-Lag Rendering (Stealth Institutional Minimalist)
 
 1. **TradingView Lightweight Charts v4/v5**:
    - Gunakan instance canvas terisolasi di dalam kontainer reaktif (Next.js/React `useRef` + `useEffect`).
    - Wajib memanggil `.remove()` pada chart instance saat komponen mengalami *unmount* untuk mencegah kebocoran memori WebGL/Canvas.
    - Aktifkan `autoSize: true` dan tangani event *window resize* dengan debounce 100ms.
-2. **Pewarnaan Kontras Finansial (Dark Theme First)**:
-   - Background: Dark slate/navy `#0d1117` atau `#131722`.
-   - Bullish Candle: `#22c55e` (Emerald 500) atau `#089981`.
-   - Bearish Candle: `#ef4444` (Red 500) atau `#f23645`.
-   - Wick & Border: Selaras dengan body candle.
-   - Liquidity Sweep Indicator: Gold/Amber `#f59e0b` untuk menonjolkan momen krusial.
+2. **Pewarnaan Matte Finansial (Stealth Obsidian Palette)**:
+   - Canvas Background: `#090A0F` (Charcoal Obsidian pekat).
+   - Panels & Cards: `#111319` (Slate Dark Matte) dengan border tipis 1px `#202430`.
+   - Bullish Candle: `#10B981` (Muted Emerald).
+   - Bearish Candle: `#F43F5E` (Muted Rose / Crimson).
+   - Liquidity Sweep Marker: `#D97706` (Warm Matte Gold redup).
+   - **Zero-Emoji Policy**: Dilarang menggunakan emoji apa pun di antarmuka; gunakan micro-dot 6px dan SVG vektor outline.
+   - **No Neon Clutter**: Dilarang menggunakan warna cyan/biru neon terang atau efek glow yang menyilaukan mata.
 3. **Data Refresh & Streaming**:
    - Update candle real-time via WebSocket menggunakan method `series.update()` (bukan reload seluruh array `series.setData()`) demi efisiensi CPU 60fps.
 
