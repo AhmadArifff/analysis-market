@@ -1,84 +1,19 @@
 import { NextResponse } from "next/server";
+import { getRealWatchlist } from "@/lib/data-feed/marketDataService";
 
 export async function GET() {
-  const watchlist = [
-    {
-      symbol: "XAUUSD",
-      name: "Gold Spot / US Dollar",
-      category: "FOREX",
-      last_price: 2642.5,
-      change_24h: 1.18,
-      consecutive_bar: 4,
-      max_bar_cycle: 5,
-      exhaustion_status: "WARNING",
-      confluence_score: 85,
-      macro_trend: "BULLISH",
-    },
-    {
-      symbol: "BTCUSDT",
-      name: "Bitcoin / Tether",
-      category: "CRYPTO_MAJOR",
-      last_price: 64520.0,
-      change_24h: 3.12,
-      consecutive_bar: 2,
-      max_bar_cycle: 5,
-      exhaustion_status: "NORMAL",
-      confluence_score: 45,
-      macro_trend: "BULLISH",
-    },
-    {
-      symbol: "ETHUSDT",
-      name: "Ethereum / Tether",
-      category: "CRYPTO_MAJOR",
-      last_price: 2615.4,
-      change_24h: -0.45,
-      consecutive_bar: 1,
-      max_bar_cycle: 5,
-      exhaustion_status: "NORMAL",
-      confluence_score: 30,
-      macro_trend: "NEUTRAL",
-    },
-    {
-      symbol: "SOLUSDT",
-      name: "Solana / Tether",
-      category: "CRYPTO_MAJOR",
-      last_price: 154.2,
-      change_24h: 5.25,
-      consecutive_bar: 3,
-      max_bar_cycle: 5,
-      exhaustion_status: "NORMAL",
-      confluence_score: 65,
-      macro_trend: "BULLISH",
-    },
-    {
-      symbol: "PEPEUSDT",
-      name: "Pepe / Tether",
-      category: "CRYPTO_MEME",
-      last_price: 0.00001045,
-      change_24h: 11.8,
-      consecutive_bar: 5,
-      max_bar_cycle: 5,
-      exhaustion_status: "CRITICAL_ALERT",
-      confluence_score: 90,
-      macro_trend: "BULLISH",
-    },
-    {
-      symbol: "DOGEUSDT",
-      name: "Dogecoin / Tether",
-      category: "CRYPTO_MEME",
-      last_price: 0.1245,
-      change_24h: 3.8,
-      consecutive_bar: 2,
-      max_bar_cycle: 5,
-      exhaustion_status: "NORMAL",
-      confluence_score: 50,
-      macro_trend: "BULLISH",
-    },
-  ];
-
-  return NextResponse.json({
-    success: true,
-    timestamp: new Date().toISOString(),
-    data: watchlist,
-  });
+  try {
+    const data = await getRealWatchlist();
+    return NextResponse.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      data,
+    });
+  } catch (error) {
+    console.error("Watchlist API Error:", error);
+    return NextResponse.json(
+      { success: false, error: "Failed to fetch real watchlist" },
+      { status: 500 }
+    );
+  }
 }

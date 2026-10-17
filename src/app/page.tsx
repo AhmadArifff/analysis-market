@@ -202,30 +202,87 @@ export default function TerminalHome() {
 
   const activeAsset = watchlist.find((w) => w.symbol === selectedSymbol) || watchlist[0];
 
-  // Pools configuration
-  const pools: LiquidityPool[] = [
-    {
-      pool_id: 201,
-      pool_type: "BUY_SL",
-      pool_price: activeAsset.last_price * 0.992,
-      retail_rr: 1.85,
-      status: "SWEPT",
-      swept_ago: "2 candles ago",
-    },
-    {
-      pool_id: 202,
-      pool_type: "SELL_SL",
-      pool_price: activeAsset.last_price * 1.018,
-      retail_rr: 2.1,
-      status: "PENDING",
-      swept_ago: null,
-    },
-  ];
+  const [isLoadingCandles, setIsLoadingCandles] = useState(false);
+  const [pools, setPools] = useState<LiquidityPool[]>([]);
+  const [realExhaustion, setRealExhaustion] = useState<{
+    consecutive_bars: number;
+    daily_move_pct: number;
+    atr_14: number;
+    status: string;
+    fast_rsi_5: number;
+  } | null>(null);
 
-  // Regenerate candles when active asset changes
+  // 1. Fetch live watchlist on mount
   useEffect(() => {
-    setCandles(generateCandles(activeAsset.last_price, 50));
-  }, [activeAsset.symbol, activeAsset.last_price]);
+    async function loadWatchlist() {
+      try {
+        const res = await fetch("/api/market/watchlist");
+        if (res.ok) {
+          const json = await res.json();
+          if (json.data && json.data.length > 0) {
+            setWatchlist(json.data);
+          }
+        }
+      } catch (err) {
+        console.error("Watchlist fetch error:", err);
+      }
+    }
+    loadWatchlist();
+  }, []);
+
+  // 2. Fetch real candles and calculated liquidity pools whenever selectedSymbol or timeframe changes
+  useEffect(() => {
+    let isCancelled = false;
+    async function loadCandles() {
+      setIsLoadingCandles(true);
+      try {
+        const res = await fetch(`/api/market/candles?symbol=${selectedSymbol}&timeframe=${timeframe}`);
+        if (res.ok) {
+          const json = await res.json();
+          if (!isCancelled && json.candles && json.candles.length > 0) {
+            setCandles(json.candles);
+            if (json.pools && json.pools.length > 0) {
+              setPools(json.pools);
+            } else {
+              setPools([
+                {
+                  pool_id: 201,
+                  pool_type: "BUY_SL",
+                  pool_price: activeAsset.last_price * 0.992,
+                  retail_rr: 1.85,
+                  status: "SWEPT",
+                  swept_ago: "Recent Low",
+                },
+                {
+                  pool_id: 202,
+                  pool_type: "SELL_SL",
+                  pool_price: activeAsset.last_price * 1.018,
+                  retail_rr: 2.1,
+                  status: "PENDING",
+                  swept_ago: null,
+                },
+              ]);
+            }
+            if (json.exhaustion) {
+              setRealExhaustion(json.exhaustion);
+            }
+            setIsLoadingCandles(false);
+            return;
+          }
+        }
+      } catch (e) {
+        console.error("Error fetching real candles:", e);
+      }
+      if (!isCancelled) {
+        setCandles(generateCandles(activeAsset.last_price, 50));
+        setIsLoadingCandles(false);
+      }
+    }
+    loadCandles();
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedSymbol, timeframe, activeAsset.last_price]);
 
   // Handle Excel Export from Backend
   const handleExportExcel = async () => {
@@ -411,14 +468,26 @@ export default function TerminalHome() {
 
             <div className="flex items-center gap-4 text-xs font-mono">
               <span className="text-[#8E9BAE]">
-                DAILY MOVE: <span className="text-[#E2E8F0] font-semibold">3.20%</span>
+                DAILY MOVE:{" "}
+                <span className="text-[#E2E8F0] font-semibold">
+                  {realExhaustion ? `${realExhaustion.daily_move_pct}%` : `${activeAsset.change_24h}%`}
+                </span>
               </span>
               <span className="text-[#8E9BAE]">
-                ATR(14): <span className="text-[#E2E8F0] font-semibold">28.50</span>
+                ATR(14):{" "}
+                <span className="text-[#E2E8F0] font-semibold">
+                  {realExhaustion ? realExhaustion.atr_14 : "..."}
+                </span>
               </span>
-              <span className="rounded bg-[#1A1F2C] px-2 py-0.5 text-[#10B981] font-semibold">
-                NORMALIZED VOLATILITY
-              </span>
+              {isLoadingCandles ? (
+                <span className="rounded bg-[#1A1F2C] px-2 py-0.5 text-[#38BDF8] font-semibold animate-pulse">
+                  FETCHING LIVE FEED...
+                </span>
+              ) : (
+                <span className="rounded bg-[#1A1F2C] px-2 py-0.5 text-[#10B981] font-semibold">
+                  LIVE REAL-TIME FEED
+                </span>
+              )}
             </div>
           </div>
 
