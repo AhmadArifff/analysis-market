@@ -19,9 +19,14 @@ import {
 } from "lucide-react";
 import type { CandleData, LiquidityPool } from "@/components/LightweightChart";
 
-// Dynamically import LightweightChart to prevent SSR hydration mismatch with Canvas
+// Dynamically import chart components to prevent SSR hydration mismatch with Canvas
 const LightweightChart = dynamic(
   () => import("@/components/LightweightChart"),
+  { ssr: false }
+);
+
+const TradingViewWidget = dynamic(
+  () => import("@/components/TradingViewWidget"),
   { ssr: false }
 );
 
@@ -165,6 +170,7 @@ interface PaperTrade {
 export default function TerminalHome() {
   const [selectedSymbol, setSelectedSymbol] = useState("XAUUSD");
   const [timeframe, setTimeframe] = useState("4h");
+  const [chartMode, setChartMode] = useState<"tradingview" | "quant">("tradingview");
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>(DEFAULT_WATCHLIST);
   const [candles, setCandles] = useState<CandleData[]>([]);
   const [isExporting, setIsExporting] = useState(false);
@@ -447,10 +453,35 @@ export default function TerminalHome() {
       <main className="grid grid-cols-1 gap-6 p-6 xl:grid-cols-12">
         {/* Left Column: Interactive Lightweight Chart + Timeframe Tabs (8 cols) */}
         <div className="space-y-4 xl:col-span-8">
-          {/* Timeframe Controls Bar */}
-          <div className="flex flex-wrap items-center justify-between rounded border border-[#1F2430] bg-[#0E1118] px-4 py-2.5">
+          {/* Timeframe & Chart Engine Controls Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-[#1F2430] bg-[#0E1118] px-4 py-2.5">
+            {/* Chart Engine Selector */}
+            <div className="flex items-center gap-1.5 border-r border-[#1F2430] pr-3">
+              <button
+                onClick={() => setChartMode("tradingview")}
+                className={`rounded px-3 py-1 font-mono text-xs font-bold transition ${
+                  chartMode === "tradingview"
+                    ? "bg-[#38BDF8]/20 text-[#38BDF8] border border-[#38BDF8]/60 shadow-[0_0_10px_rgba(56,189,248,0.2)]"
+                    : "text-[#8E9BAE] hover:text-[#E2E8F0]"
+                }`}
+              >
+                TRADINGVIEW PRO (LIVE)
+              </button>
+              <button
+                onClick={() => setChartMode("quant")}
+                className={`rounded px-3 py-1 font-mono text-xs font-bold transition ${
+                  chartMode === "quant"
+                    ? "bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/60 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
+                    : "text-[#8E9BAE] hover:text-[#E2E8F0]"
+                }`}
+              >
+                QUANT LIQUIDITY ENGINE
+              </button>
+            </div>
+
+            {/* Timeframe Pills */}
             <div className="flex items-center gap-2">
-              <span className="font-mono text-xs text-[#8E9BAE]">CYCLE TIMEFRAME:</span>
+              <span className="font-mono text-xs text-[#8E9BAE]">CYCLE:</span>
               {(["1M", "1W", "1D", "4h", "1h"] as const).map((tf) => (
                 <button
                   key={tf}
@@ -466,6 +497,7 @@ export default function TerminalHome() {
               ))}
             </div>
 
+            {/* Volatility & Feed Status */}
             <div className="flex items-center gap-4 text-xs font-mono">
               <span className="text-[#8E9BAE]">
                 DAILY MOVE:{" "}
@@ -491,14 +523,18 @@ export default function TerminalHome() {
             </div>
           </div>
 
-          {/* Interactive Chart Component */}
-          <LightweightChart
-            symbol={activeAsset.symbol}
-            timeframe={timeframe}
-            candles={candles}
-            pools={pools}
-            height={500}
-          />
+          {/* Interactive Chart Component (TradingView Pro Live vs Quant Engine) */}
+          {chartMode === "tradingview" ? (
+            <TradingViewWidget symbol={activeAsset.symbol} height={520} />
+          ) : (
+            <LightweightChart
+              symbol={activeAsset.symbol}
+              timeframe={timeframe}
+              candles={candles}
+              pools={pools}
+              height={520}
+            />
+          )}
 
           {/* Paper Trading Forward-Marking Table */}
           <div className="rounded border border-[#1F2430] bg-[#0E1118] p-4">
