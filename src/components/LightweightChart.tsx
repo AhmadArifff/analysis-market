@@ -103,30 +103,42 @@ export default function LightweightChart({
       wickDownColor: "#F43F5E",
     });
 
-    candlestickSeries.setData(candles);
-
-    // Volume series at bottom
-    const volumeSeries = chart.addSeries(HistogramSeries, {
-      color: "#1F2937",
-      priceFormat: {
-        type: "volume",
-      },
-      priceScaleId: "",
+    // Ensure data is chronologically ascending with strictly unique timestamps
+    const timeMap = new Map<string, CandleData>();
+    candles.forEach((c) => {
+      timeMap.set(String(c.time), c);
     });
 
-    volumeSeries.priceScale().applyOptions({
-      scaleMargins: {
-        top: 0.82,
-        bottom: 0,
-      },
+    const sortedCandles = Array.from(timeMap.values()).sort((a, b) => {
+      return String(a.time).localeCompare(String(b.time));
     });
 
-    const volumeData = candles.map((c) => ({
-      time: c.time,
-      value: c.volume || Math.random() * 800 + 200,
-      color: c.close >= c.open ? "rgba(16, 185, 129, 0.25)" : "rgba(244, 63, 94, 0.25)",
-    }));
-    volumeSeries.setData(volumeData);
+    if (sortedCandles.length > 0) {
+      candlestickSeries.setData(sortedCandles);
+
+      // Volume series at bottom
+      const volumeSeries = chart.addSeries(HistogramSeries, {
+        color: "#1F2937",
+        priceFormat: {
+          type: "volume",
+        },
+        priceScaleId: "",
+      });
+
+      volumeSeries.priceScale().applyOptions({
+        scaleMargins: {
+          top: 0.82,
+          bottom: 0,
+        },
+      });
+
+      const volumeData = sortedCandles.map((c) => ({
+        time: c.time,
+        value: c.volume || 450,
+        color: c.close >= c.open ? "rgba(16, 185, 129, 0.25)" : "rgba(244, 63, 94, 0.25)",
+      }));
+      volumeSeries.setData(volumeData);
+    }
 
     // Draw active liquidity pool price lines
     pools.forEach((pool) => {

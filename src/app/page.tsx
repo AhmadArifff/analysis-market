@@ -113,17 +113,20 @@ const DEFAULT_WATCHLIST: WatchlistItem[] = [
   },
 ];
 
-// Helper to generate realistic sample candle sequence for symbol
+// Helper to generate realistic sample candle sequence for symbol with strictly unique ascending dates
 function generateCandles(basePrice: number, count: number = 60): CandleData[] {
   const candles: CandleData[] = [];
   const now = new Date();
   let currentPrice = basePrice * 0.94;
 
   for (let i = count; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 4 * 3600 * 1000);
-    const dateStr = d.toISOString().split("T")[0];
+    const d = new Date(now.getTime() - i * 24 * 3600 * 1000);
+    const year = d.getUTCFullYear();
+    const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const dateStr = `${year}-${month}-${day}`;
 
-    const volatility = currentPrice * 0.008;
+    const volatility = currentPrice * 0.01;
     const change = (Math.random() - 0.46) * volatility;
     const open = currentPrice;
     const close = currentPrice + change;
