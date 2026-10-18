@@ -29,11 +29,19 @@ export interface LiquidityPool {
   swept_ago?: string | null;
 }
 
+export interface ActiveTradeMarker {
+  side: "LONG" | "SHORT";
+  entry_px: number;
+  sl_px: number;
+  tp_px: number;
+}
+
 interface LightweightChartProps {
   symbol: string;
   timeframe: string;
   candles: CandleData[];
   pools: LiquidityPool[];
+  activePosition?: ActiveTradeMarker | null;
   height?: number;
 }
 
@@ -42,6 +50,7 @@ export default function LightweightChart({
   timeframe,
   candles,
   pools,
+  activePosition = null,
   height = 520,
 }: LightweightChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -156,6 +165,39 @@ export default function LightweightChart({
       });
     });
 
+    // Draw active position lines (Entry, Stop Loss, Take Profit)
+    if (activePosition) {
+      // Entry Line (Cyan Dashed)
+      candlestickSeries.createPriceLine({
+        price: activePosition.entry_px,
+        color: "#38BDF8",
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `ENTRY [${activePosition.side}] $${activePosition.entry_px}`,
+      });
+
+      // Stop Loss Line (Rose Solid)
+      candlestickSeries.createPriceLine({
+        price: activePosition.sl_px,
+        color: "#F43F5E",
+        lineWidth: 2,
+        lineStyle: LineStyle.Solid,
+        axisLabelVisible: true,
+        title: `STOP LOSS $${activePosition.sl_px}`,
+      });
+
+      // Take Profit Line (Emerald Solid)
+      candlestickSeries.createPriceLine({
+        price: activePosition.tp_px,
+        color: "#10B981",
+        lineWidth: 2,
+        lineStyle: LineStyle.Solid,
+        axisLabelVisible: true,
+        title: `TAKE PROFIT $${activePosition.tp_px}`,
+      });
+    }
+
     // Auto-fit content
     chart.timeScale().fitContent();
 
@@ -175,7 +217,7 @@ export default function LightweightChart({
       chart.remove();
       chartRef.current = null;
     };
-  }, [candles, pools, height]);
+  }, [candles, pools, activePosition, height]);
 
   return (
     <div className="relative w-full rounded-lg border border-[#1F2430] bg-[#0B0D13] overflow-hidden">
