@@ -42,6 +42,7 @@ interface LightweightChartProps {
   candles: CandleData[];
   pools: LiquidityPool[];
   activePosition?: ActiveTradeMarker | null;
+  liveTickPrice?: number | null;
   height?: number;
 }
 
@@ -51,10 +52,13 @@ export default function LightweightChart({
   candles,
   pools,
   activePosition = null,
+  liveTickPrice = null,
   height = 520,
 }: LightweightChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const lastBarRef = useRef<CandleData | null>(null);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -124,8 +128,10 @@ export default function LightweightChart({
       return ta - tb;
     });
 
+    candlestickSeriesRef.current = candlestickSeries;
     if (sortedCandles.length > 0) {
       candlestickSeries.setData(sortedCandles as any);
+      lastBarRef.current = sortedCandles[sortedCandles.length - 1];
 
       // Volume series at bottom
       const volumeSeries = chart.addSeries(HistogramSeries, {
@@ -218,8 +224,27 @@ export default function LightweightChart({
       window.removeEventListener("resize", handleResize);
       chart.remove();
       chartRef.current = null;
+      candlestickSeriesRef.current = null;
     };
   }, [candles, pools, activePosition, height]);
+
+  // Real-Time Live Ticker Dynamic Candle Update Effect
+  useEffect(() => {
+    if (!liveTickPrice || !candlestickSeriesRef.current || !lastBarRef.current) return;
+    const current = lastBarRef.current;
+    const updated: CandleData = {
+      ...current,
+      high: Math.max(current.high, liveTickPrice),
+      low: Math.min(current.low, liveTickPrice),
+      close: liveTickPrice,
+    };
+    lastBarRef.current = updated;
+    try {
+      candlestickSeriesRef.current.update(updated as any);
+    } catch {
+      // Ignore if timeframe format differs
+    }
+  }, [liveTickPrice]);
 
   return (
     <div className="relative w-full rounded-lg border border-[#1F2430] bg-[#0B0D13] overflow-hidden">
@@ -235,6 +260,11 @@ export default function LightweightChart({
             <span className="h-1.5 w-1.5 rounded-full bg-[#10B981] animate-pulse"></span>
             FEED ACTIVE
           </span>
+          {liveTickPrice && (
+            <span className="rounded border border-[#10B981]/50 bg-[#10B981]/15 px-2 py-0.5 font-mono text-[11px] font-bold text-[#10B981] animate-fade-in">
+              LIVE TICK: ${liveTickPrice < 1 ? liveTickPrice.toFixed(6) : liveTickPrice.toFixed(2)}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <span className="font-mono text-[11px] text-[#64748B]">

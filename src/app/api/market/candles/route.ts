@@ -3,8 +3,6 @@ import { getRealCandles } from "@/lib/data-feed/marketDataService";
 import { mapLiquidityAndSweeps } from "@/lib/quant-engine/liquidity";
 import { evaluateExhaustion } from "@/lib/quant-engine/exhaustion";
 
-export const dynamic = "force-dynamic";
-
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;

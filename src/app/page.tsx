@@ -22,6 +22,7 @@ import {
   Clock,
   Sliders,
   Calendar,
+  Flame,
 } from "lucide-react";
 import type { CandleData, LiquidityPool } from "@/components/LightweightChart";
 import {
@@ -31,6 +32,7 @@ import {
   stepReplaySimulation,
   runFullAutomatedBacktest,
 } from "@/lib/quant-engine/simulator";
+import { useRealtimeTicker } from "@/lib/data-feed/useRealtimeTicker";
 
 export const AVAILABLE_TIMEFRAMES = [
   { id: "1m", label: "1m", desc: "1 Menit" },
@@ -67,6 +69,11 @@ const LightweightChart = dynamic(
 
 const TradingViewWidget = dynamic(
   () => import("@/components/TradingViewWidget"),
+  { ssr: false }
+);
+
+const DexScreenerWidget = dynamic(
+  () => import("@/components/DexScreenerWidget"),
   { ssr: false }
 );
 
@@ -196,7 +203,7 @@ function generateCandles(basePrice: number, count: number = 60): CandleData[] {
 export default function TerminalHome() {
   const [selectedSymbol, setSelectedSymbol] = useState("XAUUSD");
   const [timeframe, setTimeframe] = useState("1D");
-  const [chartMode, setChartMode] = useState<"quant" | "tradingview">("quant");
+  const [chartMode, setChartMode] = useState<"quant" | "tradingview" | "dexscreener">("quant");
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>(DEFAULT_WATCHLIST);
   const [fullCandles, setFullCandles] = useState<CandleData[]>([]);
   const [pools, setPools] = useState<LiquidityPool[]>([]);
@@ -227,6 +234,12 @@ export default function TerminalHome() {
   } | null>(null);
 
   const activeAsset = watchlist.find((w) => w.symbol === selectedSymbol) || watchlist[0];
+
+  // Real-Time WebSocket & Fast Tick Streaming Feed
+  const { liveTick, isConnected: isLiveWsConnected } = useRealtimeTicker(
+    activeAsset.symbol,
+    activeAsset.last_price
+  );
 
   // 1. Fetch live watchlist on mount
   useEffect(() => {
@@ -500,7 +513,9 @@ export default function TerminalHome() {
         <div className="flex items-center gap-3 overflow-x-auto pb-1">
           {watchlist.map((item) => {
             const isSelected = item.symbol === selectedSymbol;
-            const isPositive = item.change_24h >= 0;
+            const itemPrice = isSelected && liveTick?.price ? liveTick.price : item.last_price;
+            const itemChange = isSelected && liveTick?.change24h !== undefined ? liveTick.change24h : item.change_24h;
+            const isPositive = itemChange >= 0;
             return (
               <button
                 key={item.symbol}
@@ -516,12 +531,23 @@ export default function TerminalHome() {
                     <span className="font-mono text-xs font-bold text-[#E2E8F0]">
                       {item.symbol}
                     </span>
+                    {isSelected && isLiveWsConnected && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-[#10B981] animate-pulse" title="Live WebSocket Ticker Connected"></span>
+                    )}
                     <span className="rounded bg-[#1A1F2C] px-1.5 py-0.2 font-mono text-[10px] text-[#8E9BAE]">
                       {item.category === "FOREX" ? "FX" : "CRYPTO"}
                     </span>
                   </div>
-                  <div className="font-mono text-[13px] font-semibold text-[#F8FAFC]">
-                    ${item.last_price < 1 ? item.last_price.toFixed(6) : item.last_price.toLocaleString()}
+                  <div
+                    className={`font-mono text-[13px] font-semibold transition ${
+                      isSelected && liveTick?.direction === "UP"
+                        ? "text-[#10B981]"
+                        : isSelected && liveTick?.direction === "DOWN"
+                        ? "text-[#F43F5E]"
+                        : "text-[#F8FAFC]"
+                    }`}
+                  >
+                    ${itemPrice < 1 ? itemPrice.toFixed(6) : itemPrice.toLocaleString()}
                   </div>
                 </div>
 
@@ -532,7 +558,7 @@ export default function TerminalHome() {
                     }`}
                   >
                     {isPositive ? "+" : ""}
-                    {item.change_24h.toFixed(2)}%
+                    {itemChange.toFixed(2)}%
                   </div>
                   <div className="mt-0.5 flex items-center justify-end gap-1">
                     <span
@@ -563,16 +589,22 @@ export default function TerminalHome() {
           <div className="space-y-2 rounded border border-[#1F2430] bg-[#0E1118] p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               {/* Chart Engine Selector */}
-              <div className="flex items-center gap-1.5 border-r border-[#1F2430] pr-3">
+              <div className="flex flex-wrap items-center gap-1.5 border-r border-[#1F2430] pr-3">
                 <button
                   onClick={() => setChartMode("quant")}
-                  className={`rounded px-3 py-1 font-mono text-xs font-bold transition ${
+                  className={`flex items-center gap-1.5 rounded px-3 py-1 font-mono text-xs font-bold transition ${
                     chartMode === "quant"
                       ? "bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/60 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
                       : "text-[#8E9BAE] hover:text-[#E2E8F0]"
                   }`}
+                  title="Algorithmic Liquidity Engine with Bar Replay Simulator & Live WebSocket Ticker"
                 >
-                  QUANT REPLAY ENGINE
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      isLiveWsConnected ? "bg-[#10B981] animate-pulse" : "bg-[#64748B]"
+                    }`}
+                  ></span>
+                  <span>QUANT REPLAY (LIVE WS)</span>
                 </button>
                 <button
                   onClick={() => setChartMode("tradingview")}
@@ -581,8 +613,21 @@ export default function TerminalHome() {
                       ? "bg-[#38BDF8]/20 text-[#38BDF8] border border-[#38BDF8]/60 shadow-[0_0_10px_rgba(56,189,248,0.2)]"
                       : "text-[#8E9BAE] hover:text-[#E2E8F0]"
                   }`}
+                  title="Official TradingView Advanced Chart (OANDA Forex & Binance Crypto Live Data)"
                 >
                   TRADINGVIEW PRO (LIVE)
+                </button>
+                <button
+                  onClick={() => setChartMode("dexscreener")}
+                  className={`flex items-center gap-1.5 rounded px-3 py-1 font-mono text-xs font-bold transition ${
+                    chartMode === "dexscreener"
+                      ? "bg-[#8B5CF6]/20 text-[#A78BFA] border border-[#8B5CF6]/60 shadow-[0_0_10px_rgba(139,92,246,0.3)]"
+                      : "text-[#8E9BAE] hover:text-[#E2E8F0]"
+                  }`}
+                  title="Solana Memecoin Terminal with DexScreener Real-Time Charts & Liquidity Pools"
+                >
+                  <Flame className="h-3.5 w-3.5 text-[#A78BFA]" />
+                  <span>SOLANA MEME DEX</span>
                 </button>
               </div>
 
@@ -937,6 +982,8 @@ export default function TerminalHome() {
           {/* Interactive Chart Component */}
           {chartMode === "tradingview" ? (
             <TradingViewWidget symbol={activeAsset.symbol} timeframe={timeframe} height={520} />
+          ) : chartMode === "dexscreener" ? (
+            <DexScreenerWidget height={540} />
           ) : (
             <LightweightChart
               symbol={activeAsset.symbol}
@@ -944,6 +991,7 @@ export default function TerminalHome() {
               candles={visibleCandles}
               pools={pools}
               activePosition={activePosition}
+              liveTickPrice={liveTick?.price}
               height={520}
             />
           )}
