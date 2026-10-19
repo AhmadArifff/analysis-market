@@ -33,7 +33,10 @@ export async function GET(request: NextRequest) {
       signal,
       exhaustion,
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.digest?.startsWith("NEXT_") || error?.message?.includes("bail out of prerendering")) {
+      throw error;
+    }
     console.error("Candles API Error:", error);
     return NextResponse.json(
       { success: false, error: "Internal market feed error" },

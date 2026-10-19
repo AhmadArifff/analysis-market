@@ -62,7 +62,9 @@ export function stepReplaySimulation(
   currentPosition: ActivePosition | null,
   symbol: string,
   timeframe: string = "4h",
-  directionFilter: TradeDirectionFilter = "AUTO"
+  directionFilter: TradeDirectionFilter = "AUTO",
+  minWickRatio: number = 0.20,
+  riskRewardRatio: number = 2.0
 ): SimulationStepResult {
   if (currentIndex < 5 || currentIndex >= allCandles.length) {
     return {
@@ -264,14 +266,14 @@ export function stepReplaySimulation(
       const isBuySweep =
         currentBar.low < buySweepLevel &&
         currentBar.close > buySweepLevel &&
-        lowerWickRatio >= 0.20;
+        lowerWickRatio >= minWickRatio;
 
       // Sell SL Sweep Condition (Price spikes above recent high/pullback to sweep retail stops, then rejects down)
       const sellSweepLevel = Math.min(recentMaxHigh, lastHigh ? lastHigh.price : Infinity);
       const isSellSweep =
         currentBar.high > sellSweepLevel &&
         currentBar.close < sellSweepLevel &&
-        upperWickRatio >= 0.20;
+        upperWickRatio >= minWickRatio;
 
       let allowLong = false;
       let allowShort = false;
@@ -285,11 +287,11 @@ export function stepReplaySimulation(
         // In Uptrend: Trend-confluent dip buy is primary. Counter-trend shorts ONLY on Exhaustion Climax.
         if (isUptrend) {
           allowLong = isBuySweep;
-          allowShort = isSellSweep && (fastRsi >= 72 || consecutiveBars >= 4 || upperWickRatio >= 0.35);
+          allowShort = isSellSweep && (fastRsi >= 72 || consecutiveBars >= 4 || upperWickRatio >= minWickRatio * 1.5);
         } else {
           // In Downtrend: Trend-confluent rally sell is primary. Counter-trend longs ONLY on Exhaustion Climax.
           allowShort = isSellSweep;
-          allowLong = isBuySweep && (fastRsi <= 28 || consecutiveBars >= 4 || lowerWickRatio >= 0.35);
+          allowLong = isBuySweep && (fastRsi <= 28 || consecutiveBars >= 4 || lowerWickRatio >= minWickRatio * 1.5);
         }
       } else {
         // ALL (Bi-directional)
@@ -301,7 +303,7 @@ export function stepReplaySimulation(
       if (allowLong) {
         const risk = Math.max(currentBar.close - currentBar.low, currentBar.close * 0.005);
         const sl = currentBar.low - risk * 0.1;
-        const targetDistance = (currentBar.close - sl) * 2;
+        const targetDistance = (currentBar.close - sl) * riskRewardRatio;
         const tp =
           lastHigh && lastHigh.price > currentBar.close
             ? Math.max(lastHigh.price, currentBar.close + targetDistance)
@@ -330,7 +332,7 @@ export function stepReplaySimulation(
       else if (allowShort) {
         const risk = Math.max(currentBar.high - currentBar.close, currentBar.close * 0.005);
         const sl = currentBar.high + risk * 0.1;
-        const targetDistance = (sl - currentBar.close) * 2;
+        const targetDistance = (sl - currentBar.close) * riskRewardRatio;
         const tp =
           lastLow && lastLow.price < currentBar.close
             ? Math.min(lastLow.price, currentBar.close - targetDistance)
@@ -373,7 +375,9 @@ export function runFullAutomatedBacktest(
   candles: Candle[],
   symbol: string,
   timeframe: string = "4h",
-  directionFilter: TradeDirectionFilter = "AUTO"
+  directionFilter: TradeDirectionFilter = "AUTO",
+  minWickRatio: number = 0.20,
+  riskRewardRatio: number = 2.0
 ): {
   trades: ReplayTrade[];
   summary: {
@@ -390,7 +394,16 @@ export function runFullAutomatedBacktest(
   let currentPos: ActivePosition | null = null;
 
   for (let i = 10; i < candles.length; i++) {
-    const result = stepReplaySimulation(candles, i, currentPos, symbol, timeframe, directionFilter);
+    const result = stepReplaySimulation(
+      candles,
+      i,
+      currentPos,
+      symbol,
+      timeframe,
+      directionFilter,
+      minWickRatio,
+      riskRewardRatio
+    );
     if (result.closedTrade) {
       trades.push(result.closedTrade);
     }

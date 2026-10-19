@@ -23,6 +23,7 @@ import {
   Sliders,
   Calendar,
   Flame,
+  BarChart3,
 } from "lucide-react";
 import type { CandleData, LiquidityPool } from "@/components/LightweightChart";
 import {
@@ -33,6 +34,9 @@ import {
   runFullAutomatedBacktest,
 } from "@/lib/quant-engine/simulator";
 import { useRealtimeTicker } from "@/lib/data-feed/useRealtimeTicker";
+import { terminalAudio } from "@/lib/alerts/audioChime";
+import SettingsDrawer, { DEFAULT_SETTINGS, StrategySettings } from "@/components/SettingsDrawer";
+import MonteCarloModal from "@/components/MonteCarloModal";
 
 export const AVAILABLE_TIMEFRAMES = [
   { id: "1m", label: "1m", desc: "1 Menit" },
@@ -59,6 +63,24 @@ function formatBarTime(t: string | number | undefined): string {
     return `${yr}-${mo}-${da} ${hr}:${mi}`;
   }
   return String(t);
+}
+
+function getCurrentSessionInfo(): { name: string; isKillzone: boolean; color: string } {
+  const d = new Date();
+  const utcHours = d.getUTCHours();
+  const wibHours = (utcHours + 7) % 24;
+
+  if (wibHours >= 14 && wibHours < 16) {
+    return { name: "LONDON OPEN", isKillzone: true, color: "#10B981" };
+  } else if (wibHours >= 19 && wibHours < 22) {
+    return { name: "NEW YORK OPEN", isKillzone: true, color: "#10B981" };
+  } else if (wibHours >= 7 && wibHours < 13) {
+    return { name: "ASIA SESSION", isKillzone: false, color: "#38BDF8" };
+  } else if (wibHours >= 13 && wibHours < 19) {
+    return { name: "LONDON REGULAR", isKillzone: false, color: "#D97706" };
+  } else {
+    return { name: "NEW YORK CLOSE", isKillzone: false, color: "#64748B" };
+  }
 }
 
 // Dynamically import chart components to prevent SSR hydration mismatch with Canvas
@@ -216,6 +238,25 @@ export default function TerminalHome() {
   const [endDate, setEndDate] = useState("2026-10-19");
   const [isEndDateNow, setIsEndDateNow] = useState(true);
 
+  // Institutional Strategy Settings & Stress Testing State
+  const [settings, setSettings] = useState<StrategySettings>(DEFAULT_SETTINGS);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isMonteCarloOpen, setIsMonteCarloOpen] = useState(false);
+  const [sessionInfo, setSessionInfo] = useState({
+    name: "NEW YORK OPEN",
+    isKillzone: true,
+    color: "#10B981",
+  });
+
+  // Dynamic Session Killzone Timer (Updates on client mount & every 30s)
+  useEffect(() => {
+    setSessionInfo(getCurrentSessionInfo());
+    const timer = setInterval(() => {
+      setSessionInfo(getCurrentSessionInfo());
+    }, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
   // Bar Replay Simulator State
   const [replayIndex, setReplayIndex] = useState(15);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -280,8 +321,17 @@ export default function TerminalHome() {
           const startIdx = Math.max(5, Math.min(25, Math.floor(json.candles.length * 0.15)));
           setReplayIndex(startIdx);
 
-          // Compute initial pools on past candles
-          const initRes = stepReplaySimulation(json.candles, startIdx, null, sym, tf, directionFilter);
+          // Compute initial pools on past candles with calibrated settings
+          const initRes = stepReplaySimulation(
+            json.candles,
+            startIdx,
+            null,
+            sym,
+            tf,
+            directionFilter,
+            settings.minWickRatio,
+            settings.retailRRThreshold
+          );
           if (initRes.activePools && initRes.activePools.length > 0) {
             setPools(initRes.activePools);
           }
@@ -310,7 +360,7 @@ export default function TerminalHome() {
     loadCandles(selectedSymbol, timeframe, startDate, isEndDateNow ? "now" : endDate);
   }, [selectedSymbol, timeframe]);
 
-  // Step Replay Forward Handler
+  // Step Replay Forward Handler with Native Audio Chimes & Webhook Notifications
   const handleStepForward = () => {
     if (replayIndex >= fullCandles.length - 1) {
       setIsPlaying(false);
@@ -327,15 +377,72 @@ export default function TerminalHome() {
       activePosition,
       activeAsset.symbol,
       timeframe,
-      directionFilter
+      directionFilter,
+      settings.minWickRatio,
+      settings.retailRRThreshold
     );
 
     if (stepResult.activePools && stepResult.activePools.length > 0) {
       setPools(stepResult.activePools);
     }
 
+    // Trade Opening Event (New position entered on this bar)
+    if (!activePosition && stepResult.newPosition) {
+      if (settings.soundEnabled) {
+        terminalAudio.playSweepAlert();
+      }
+      if (settings.discordWebhookUrl || settings.telegramToken) {
+        fetch("/api/alerts/webhook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            webhookUrl: settings.discordWebhookUrl,
+            telegramToken: settings.telegramToken,
+            telegramChatId: settings.telegramChatId,
+            signal: {
+              symbol: stepResult.newPosition.symbol,
+              side: stepResult.newPosition.side,
+              entry_px: stepResult.newPosition.entry_px,
+              sl_px: stepResult.newPosition.sl_px,
+              tp_px: stepResult.newPosition.tp_px,
+              confluence_score: stepResult.newPosition.confluence_score,
+              setup_type: stepResult.newPosition.setup_type,
+            },
+          }),
+        }).catch(() => {});
+      }
+    }
+
+    // Trade Closing Event (Take Profit or Stop Loss hit)
     if (stepResult.closedTrade) {
       setSimulationTrades((prev) => [stepResult.closedTrade!, ...prev]);
+      if (settings.soundEnabled) {
+        if (stepResult.closedTrade.result === "WIN") {
+          terminalAudio.playWinChime();
+        } else {
+          terminalAudio.playLossChime();
+        }
+      }
+      if (settings.discordWebhookUrl || settings.telegramToken) {
+        fetch("/api/alerts/webhook", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            webhookUrl: settings.discordWebhookUrl,
+            telegramToken: settings.telegramToken,
+            telegramChatId: settings.telegramChatId,
+            signal: {
+              symbol: stepResult.closedTrade.asset,
+              side: stepResult.closedTrade.side,
+              entry_px: stepResult.closedTrade.entry_px,
+              sl_px: stepResult.closedTrade.sl_px,
+              tp_px: stepResult.closedTrade.tp_px,
+              confluence_score: stepResult.closedTrade.confluence_score,
+              setup_type: `${stepResult.closedTrade.result} (${stepResult.closedTrade.pnl_pct >= 0 ? "+" : ""}${stepResult.closedTrade.pnl_pct}%)`,
+            },
+          }),
+        }).catch(() => {});
+      }
     }
 
     setActivePosition(stepResult.newPosition);
@@ -351,7 +458,16 @@ export default function TerminalHome() {
       setIsPlaying(false);
       const prevIdx = replayIndex - 1;
       setReplayIndex(prevIdx);
-      const res = stepReplaySimulation(fullCandles, prevIdx, activePosition, activeAsset.symbol, timeframe, directionFilter);
+      const res = stepReplaySimulation(
+        fullCandles,
+        prevIdx,
+        activePosition,
+        activeAsset.symbol,
+        timeframe,
+        directionFilter,
+        settings.minWickRatio,
+        settings.retailRRThreshold
+      );
       if (res.activePools) setPools(res.activePools);
       setActivePosition(res.newPosition);
     }
@@ -364,7 +480,16 @@ export default function TerminalHome() {
     setSimulationTrades([]);
     const startIdx = Math.max(10, Math.floor(fullCandles.length * 0.35));
     setReplayIndex(startIdx);
-    const res = stepReplaySimulation(fullCandles, startIdx, null, activeAsset.symbol, timeframe, directionFilter);
+    const res = stepReplaySimulation(
+      fullCandles,
+      startIdx,
+      null,
+      activeAsset.symbol,
+      timeframe,
+      directionFilter,
+      settings.minWickRatio,
+      settings.retailRRThreshold
+    );
     if (res.activePools) setPools(res.activePools);
     setReplayAlert("🔄 Bar Replay di-reset ke histori masa lalu.");
   };
@@ -372,7 +497,14 @@ export default function TerminalHome() {
   // Run Full Automated Backtest across history
   const handleRunFullBacktest = () => {
     setIsPlaying(false);
-    const result = runFullAutomatedBacktest(fullCandles, activeAsset.symbol, timeframe, directionFilter);
+    const result = runFullAutomatedBacktest(
+      fullCandles,
+      activeAsset.symbol,
+      timeframe,
+      directionFilter,
+      settings.minWickRatio,
+      settings.retailRRThreshold
+    );
     setSimulationTrades(result.trades);
     setActivePosition(null);
     setReplayIndex(fullCandles.length - 1);
@@ -388,7 +520,7 @@ export default function TerminalHome() {
       handleStepForward();
     }, playSpeed);
     return () => clearInterval(timer);
-  }, [isPlaying, replayIndex, fullCandles, playSpeed, activePosition, directionFilter]);
+  }, [isPlaying, replayIndex, fullCandles, playSpeed, activePosition, directionFilter, settings]);
 
   // Dynamic KPI Metrics derived from simulationTrades
   const winningTrades = simulationTrades.filter((t) => t.result === "WIN");
@@ -479,14 +611,30 @@ export default function TerminalHome() {
           </span>
         </div>
 
-        {/* Global Controls & Excel Export */}
+        {/* Global Controls, Session Killzones, Settings & Excel Export */}
         <div className="flex items-center gap-3">
           <div className="hidden lg:flex items-center gap-2 font-mono text-xs text-[#94A3B8] border-r border-[#1F2430] pr-4">
             <Clock className="h-3.5 w-3.5 text-[#38BDF8]" />
             <span>SESSION:</span>
-            <span className="text-[#10B981] font-semibold">NEW YORK OPEN</span>
-            <span className="text-[#64748B]">(KILLZONE ACTIVE)</span>
+            <span className="font-semibold" style={{ color: sessionInfo.color }}>
+              {sessionInfo.name}
+            </span>
+            {sessionInfo.isKillzone ? (
+              <span className="text-[#10B981] font-bold animate-pulse">(KILLZONE ACTIVE)</span>
+            ) : (
+              <span className="text-[#64748B]">(OFF-PEAK)</span>
+            )}
           </div>
+
+          {/* Institutional Settings Drawer Trigger */}
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="flex items-center gap-1.5 rounded border border-[#1F2430] bg-[#141824] px-3 py-1.5 font-mono text-xs font-medium text-[#E2E8F0] transition hover:border-[#38BDF8] hover:bg-[#1E2538] active:scale-95"
+            title="Configure Algorithm Calibration, Capital Risk & Webhooks"
+          >
+            <Sliders className="h-3.5 w-3.5 text-[#38BDF8]" />
+            <span className="hidden sm:inline">SETTINGS</span>
+          </button>
 
           <button
             onClick={handleExportExcel}
@@ -495,7 +643,7 @@ export default function TerminalHome() {
             title="Download multi-sheet trading journal (.xlsx)"
           >
             <FileSpreadsheet className="h-3.5 w-3.5 text-[#10B981]" />
-            <span>{isExporting ? "GENERATING..." : "EXPORT EXCEL JOURNAL"}</span>
+            <span>{isExporting ? "GENERATING..." : "EXPORT EXCEL"}</span>
           </button>
         </div>
       </header>
@@ -1005,10 +1153,22 @@ export default function TerminalHome() {
                   ALGORITHMIC REPLAY JOURNAL (AUTOMATIC SWEEP EXECUTIONS)
                 </h3>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5">
                 <span className="font-mono text-[11px] text-[#64748B]">
                   COMPLETED TRADES: {simulationTrades.length}
                 </span>
+
+                {/* Monte Carlo 1,000-iteration Stress Test Trigger */}
+                <button
+                  onClick={() => setIsMonteCarloOpen(true)}
+                  disabled={simulationTrades.length < 2}
+                  className="flex items-center gap-1.5 rounded border border-[#8B5CF6]/60 bg-[#8B5CF6]/15 px-2.5 py-1 font-mono text-[11px] font-bold text-[#A78BFA] hover:bg-[#8B5CF6]/25 active:scale-95 transition disabled:opacity-40"
+                  title="Run 1,000-iteration Monte Carlo Bootstrap Risk Simulation"
+                >
+                  <BarChart3 className="h-3 w-3" />
+                  <span>MONTE CARLO (1,000 RUNS)</span>
+                </button>
+
                 <button
                   onClick={handleExportExcel}
                   disabled={isExporting}
@@ -1317,9 +1477,39 @@ export default function TerminalHome() {
                 <div className="text-base font-bold text-[#38BDF8]">-6.5%</div>
               </div>
             </div>
+
+            {/* Monte Carlo Stress Test Action */}
+            <button
+              onClick={() => setIsMonteCarloOpen(true)}
+              disabled={simulationTrades.length < 2}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded border border-[#8B5CF6]/50 bg-[#8B5CF6]/15 py-2 font-mono text-xs font-bold text-[#A78BFA] transition hover:bg-[#8B5CF6]/25 active:scale-98 disabled:opacity-40"
+              title="Run 1,000-iteration Monte Carlo Bootstrap Simulation"
+            >
+              <BarChart3 className="h-3.5 w-3.5 text-[#A78BFA]" />
+              <span>🎲 RUN MONTE CARLO STRESS TEST (1,000 RUNS)</span>
+            </button>
           </div>
         </div>
       </main>
+
+      {/* Institutional Strategy Parameters & Alert Settings Drawer */}
+      <SettingsDrawer
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        settings={settings}
+        onSave={(newSettings: StrategySettings) => {
+          setSettings(newSettings);
+          setReplayAlert("⚙ Parameter Algoritma, Manajemen Risiko & Webhook berhasil diperbarui!");
+        }}
+      />
+
+      {/* Monte Carlo 1,000-Iteration Bootstrap Simulation Modal */}
+      <MonteCarloModal
+        isOpen={isMonteCarloOpen}
+        onClose={() => setIsMonteCarloOpen(false)}
+        trades={simulationTrades}
+        initialCapital={settings.initialCapital}
+      />
     </div>
   );
 }
