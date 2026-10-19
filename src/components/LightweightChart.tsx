@@ -260,6 +260,15 @@ export default function LightweightChart({
             <span className="h-1.5 w-1.5 rounded-full bg-[#10B981] animate-pulse"></span>
             FEED ACTIVE
           </span>
+          {candles.length > 0 && (
+            <span className="hidden sm:inline-flex items-center gap-1 font-mono text-[11px] text-[#94A3B8] border-l border-[#1F2430] pl-3">
+              <span>CANDLE:</span>
+              <strong className="text-[#F8FAFC]">{String(candles[candles.length - 1]?.time)}</strong>
+              <span className="text-[#64748B]">|</span>
+              <span>CLOSE:</span>
+              <strong className="text-[#38BDF8]">${candles[candles.length - 1]?.close}</strong>
+            </span>
+          )}
           {liveTickPrice && (
             <span className="rounded border border-[#10B981]/50 bg-[#10B981]/15 px-2 py-0.5 font-mono text-[11px] font-bold text-[#10B981] animate-fade-in">
               LIVE TICK: ${liveTickPrice < 1 ? liveTickPrice.toFixed(6) : liveTickPrice.toFixed(2)}

@@ -318,13 +318,13 @@ export default function TerminalHome() {
         const json = await res.json();
         if (json.candles && json.candles.length > 0) {
           setFullCandles(json.candles);
-          const startIdx = Math.max(5, Math.min(25, Math.floor(json.candles.length * 0.15)));
-          setReplayIndex(startIdx);
+          const endIdx = json.candles.length - 1;
+          setReplayIndex(endIdx);
 
-          // Compute initial pools on past candles with calibrated settings
+          // Compute initial pools on latest candles with calibrated settings
           const initRes = stepReplaySimulation(
             json.candles,
-            startIdx,
+            endIdx,
             null,
             sym,
             tf,
@@ -340,7 +340,7 @@ export default function TerminalHome() {
             setRealExhaustion(json.exhaustion);
           }
           setReplayAlert(
-            `📊 Berhasil memuat ${json.candles.length} candle [${tf}] dari ${start} s.d ${end === "now" ? "Sekarang" : end}. Siap simulasi replay & backtest!`
+            `📊 Berhasil memuat ${json.candles.length} candle [${tf}] (${start} s.d ${end === "now" ? "Sekarang" : end}). Chart berada di posisi terkini ($${json.candles[endIdx]?.close}). Klik [REPLAY DARI AWAL] jika ingin memutar mundur ke 2021!`
           );
           setIsLoadingCandles(false);
           return;
@@ -916,7 +916,7 @@ export default function TerminalHome() {
           {chartMode === "quant" && (
             <div className="rounded border border-[#1F2430] bg-[#0E1118] p-3 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="flex items-center gap-1.5 font-mono text-xs font-bold text-[#38BDF8]">
                     <span className="h-2 w-2 rounded-full bg-[#38BDF8] animate-ping" />
                     BAR REPLAY CONTROLLER:
@@ -924,18 +924,71 @@ export default function TerminalHome() {
                   <span className="rounded bg-[#141824] px-2 py-0.5 font-mono text-[11px] text-[#94A3B8] border border-[#1F2430]">
                     BAR {replayIndex + 1} / {fullCandles.length} ({formatBarTime(currentBar?.time)})
                   </span>
+                  {replayIndex === fullCandles.length - 1 ? (
+                    <span className="rounded bg-[#10B981]/20 border border-[#10B981]/50 px-2 py-0.5 font-mono text-[10px] font-bold text-[#10B981]">
+                      ● POSISI TERKINI (NOW: ${currentPrice})
+                    </span>
+                  ) : (
+                    <span className="rounded bg-[#D97706]/20 border border-[#D97706]/50 px-2 py-0.5 font-mono text-[10px] font-bold text-[#F59E0B] animate-pulse">
+                      ⏪ REPLAY HISTORI MASA LALU (${currentPrice})
+                    </span>
+                  )}
                 </div>
 
                 {/* Player Controls */}
-                <div className="flex items-center gap-2">
-                  {/* Reset */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {/* Jump to Past (Replay from Start) */}
                   <button
-                    onClick={handleResetReplay}
-                    className="flex items-center gap-1 rounded border border-[#1F2430] bg-[#141824] px-2.5 py-1 font-mono text-xs text-[#94A3B8] hover:border-[#38BDF8] hover:text-[#E2E8F0] active:scale-95 transition"
-                    title="Reset Replay ke histori awal"
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setActivePosition(null);
+                      setSimulationTrades([]);
+                      const startIdx = Math.max(5, Math.min(25, Math.floor(fullCandles.length * 0.05)));
+                      setReplayIndex(startIdx);
+                      const res = stepReplaySimulation(
+                        fullCandles,
+                        startIdx,
+                        null,
+                        activeAsset.symbol,
+                        timeframe,
+                        directionFilter,
+                        settings.minWickRatio,
+                        settings.retailRRThreshold
+                      );
+                      if (res.activePools) setPools(res.activePools);
+                      setReplayAlert(`⏪ Memutar mundur ke awal (${formatBarTime(fullCandles[startIdx]?.time)} - $${fullCandles[startIdx]?.close}). Tekan PLAY untuk mulai simulasi!`);
+                    }}
+                    className="flex items-center gap-1 rounded border border-[#D97706]/60 bg-[#D97706]/15 px-2 py-1 font-mono text-xs text-[#F59E0B] hover:bg-[#D97706]/25 active:scale-95 transition"
+                    title="Mulai Bar Replay dari candle masa lalu"
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
-                    <span>RESET</span>
+                    <span>DARI AWAL</span>
+                  </button>
+
+                  {/* Jump to Latest (NOW) */}
+                  <button
+                    onClick={() => {
+                      setIsPlaying(false);
+                      const lastIdx = fullCandles.length - 1;
+                      setReplayIndex(lastIdx);
+                      const res = stepReplaySimulation(
+                        fullCandles,
+                        lastIdx,
+                        activePosition,
+                        activeAsset.symbol,
+                        timeframe,
+                        directionFilter,
+                        settings.minWickRatio,
+                        settings.retailRRThreshold
+                      );
+                      if (res.activePools) setPools(res.activePools);
+                      setReplayAlert(`⏩ Melompat ke candle terkini (LIVE / NOW: $${fullCandles[lastIdx]?.close}).`);
+                    }}
+                    className="flex items-center gap-1 rounded border border-[#10B981]/60 bg-[#10B981]/15 px-2 py-1 font-mono text-xs text-[#10B981] hover:bg-[#10B981]/25 active:scale-95 transition"
+                    title="Lompat ke candle paling baru (NOW)"
+                  >
+                    <FastForward className="h-3.5 w-3.5" />
+                    <span>KE NOW</span>
                   </button>
 
                   {/* Step Back */}
