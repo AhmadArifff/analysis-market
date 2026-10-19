@@ -12,15 +12,34 @@ const TV_SYMBOL_MAP: Record<string, string> = {
   PEPEUSDT: "BINANCE:PEPEUSDT",
 };
 
+const TV_INTERVAL_MAP: Record<string, string> = {
+  "1m": "1",
+  "5m": "5",
+  "15m": "15",
+  "30m": "30",
+  "45m": "45",
+  "1h": "60",
+  "4h": "240",
+  "1D": "D",
+  "1W": "W",
+  "1M": "M",
+};
+
 interface TradingViewWidgetProps {
   symbol: string;
+  timeframe?: string;
   height?: number;
 }
 
-function TradingViewWidgetComponent({ symbol, height = 520 }: TradingViewWidgetProps) {
+function TradingViewWidgetComponent({
+  symbol,
+  timeframe = "1D",
+  height = 520,
+}: TradingViewWidgetProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const tvSymbol = TV_SYMBOL_MAP[symbol] || `BINANCE:${symbol}`;
+  const tvInterval = TV_INTERVAL_MAP[timeframe] || "D";
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -41,7 +60,7 @@ function TradingViewWidgetComponent({ symbol, height = 520 }: TradingViewWidgetP
     script.innerHTML = JSON.stringify({
       autosize: true,
       symbol: tvSymbol,
-      interval: "D",
+      interval: tvInterval,
       timezone: "Asia/Jakarta",
       theme: "dark",
       style: "1",
@@ -64,7 +83,7 @@ function TradingViewWidgetComponent({ symbol, height = 520 }: TradingViewWidgetP
         containerRef.current.innerHTML = "";
       }
     };
-  }, [tvSymbol, height]);
+  }, [tvSymbol, tvInterval, height]);
 
   return (
     <div

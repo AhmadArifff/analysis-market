@@ -4,7 +4,7 @@
  */
 
 export interface Candle {
-  time: string;
+  time: string | number;
   open: number;
   high: number;
   low: number;
@@ -14,7 +14,7 @@ export interface Candle {
 
 export interface FractalPoint {
   index: number;
-  time: string;
+  time: string | number;
   type: "SWING_HIGH" | "SWING_LOW";
   price: number;
 }

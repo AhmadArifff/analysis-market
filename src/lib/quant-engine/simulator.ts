@@ -10,7 +10,7 @@ export interface ActivePosition {
   trade_id: number;
   symbol: string;
   side: "LONG" | "SHORT";
-  entry_time: string;
+  entry_time: string | number;
   entry_index: number;
   entry_px: number;
   sl_px: number;
@@ -25,11 +25,11 @@ export interface ReplayTrade {
   asset: string;
   timeframe: string;
   side: "LONG" | "SHORT";
-  entry_time: string;
+  entry_time: string | number;
   entry_px: number;
   sl_px: number;
   tp_px: number;
-  exit_time: string;
+  exit_time: string | number;
   exit_px: number;
   confluence_score: number;
   setup_type: string;

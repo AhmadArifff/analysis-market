@@ -12,7 +12,7 @@ import {
 } from "lightweight-charts";
 
 export interface CandleData {
-  time: string;
+  time: string | number;
   open: number;
   high: number;
   low: number;
@@ -119,11 +119,13 @@ export default function LightweightChart({
     });
 
     const sortedCandles = Array.from(timeMap.values()).sort((a, b) => {
-      return String(a.time).localeCompare(String(b.time));
+      const ta = typeof a.time === "number" ? a.time : new Date(a.time).getTime() / 1000;
+      const tb = typeof b.time === "number" ? b.time : new Date(b.time).getTime() / 1000;
+      return ta - tb;
     });
 
     if (sortedCandles.length > 0) {
-      candlestickSeries.setData(sortedCandles);
+      candlestickSeries.setData(sortedCandles as any);
 
       // Volume series at bottom
       const volumeSeries = chart.addSeries(HistogramSeries, {
@@ -142,11 +144,11 @@ export default function LightweightChart({
       });
 
       const volumeData = sortedCandles.map((c) => ({
-        time: c.time,
+        time: c.time as any,
         value: c.volume || 450,
         color: c.close >= c.open ? "rgba(16, 185, 129, 0.25)" : "rgba(244, 63, 94, 0.25)",
       }));
-      volumeSeries.setData(volumeData);
+      volumeSeries.setData(volumeData as any);
     }
 
     // Draw active liquidity pool price lines

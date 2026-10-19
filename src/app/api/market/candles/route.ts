@@ -8,8 +8,10 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const symbol = searchParams.get("symbol") || "XAUUSD";
     const timeframe = searchParams.get("timeframe") || "1D";
+    const startDate = searchParams.get("startDate") || undefined;
+    const endDate = searchParams.get("endDate") || undefined;
 
-    const candles = await getRealCandles(symbol, timeframe);
+    const candles = await getRealCandles(symbol, timeframe, startDate, endDate);
 
     if (candles.length === 0) {
       return NextResponse.json(

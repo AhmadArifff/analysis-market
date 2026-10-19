@@ -5,11 +5,11 @@ export interface TradeRecord {
   asset: string;
   timeframe: string;
   side: "LONG" | "SHORT";
-  entry_time: string;
+  entry_time: string | number;
   entry_px: number;
   sl_px: number;
   tp_px: number;
-  exit_time: string;
+  exit_time: string | number;
   exit_px: number;
   confluence_score: number;
   setup_type: string;
@@ -108,7 +108,19 @@ export async function generateExcelJournal(
   };
 
   trades.forEach((trade) => {
-    const row = sheetJournal.addRow(trade);
+    const formatTime = (t: string | number) => {
+      if (typeof t === "number") {
+        const d = new Date(t * 1000);
+        return d.toISOString().replace("T", " ").slice(0, 16);
+      }
+      return String(t);
+    };
+
+    const row = sheetJournal.addRow({
+      ...trade,
+      entry_time: formatTime(trade.entry_time),
+      exit_time: formatTime(trade.exit_time),
+    });
     const resultCell = row.getCell("result");
     if (trade.result === "WIN") {
       resultCell.font = { color: { argb: "FF10B981" }, bold: true };

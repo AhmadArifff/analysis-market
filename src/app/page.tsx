@@ -21,6 +21,7 @@ import {
   CheckCircle2,
   Clock,
   Sliders,
+  Calendar,
 } from "lucide-react";
 import type { CandleData, LiquidityPool } from "@/components/LightweightChart";
 import {
@@ -29,6 +30,33 @@ import {
   stepReplaySimulation,
   runFullAutomatedBacktest,
 } from "@/lib/quant-engine/simulator";
+
+export const AVAILABLE_TIMEFRAMES = [
+  { id: "1m", label: "1m", desc: "1 Menit" },
+  { id: "5m", label: "5m", desc: "5 Menit" },
+  { id: "15m", label: "15m", desc: "15 Menit" },
+  { id: "30m", label: "30m", desc: "30 Menit" },
+  { id: "45m", label: "45m", desc: "45 Menit" },
+  { id: "1h", label: "1h", desc: "1 Jam" },
+  { id: "4h", label: "4h", desc: "4 Jam" },
+  { id: "1D", label: "1D", desc: "1 Hari" },
+  { id: "1W", label: "1W", desc: "1 Minggu" },
+  { id: "1M", label: "1M", desc: "1 Bulan" },
+] as const;
+
+function formatBarTime(t: string | number | undefined): string {
+  if (!t) return "...";
+  if (typeof t === "number") {
+    const d = new Date(t * 1000);
+    const yr = d.getUTCFullYear();
+    const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const da = String(d.getUTCDate()).padStart(2, "0");
+    const hr = String(d.getUTCHours()).padStart(2, "0");
+    const mi = String(d.getUTCMinutes()).padStart(2, "0");
+    return `${yr}-${mo}-${da} ${hr}:${mi}`;
+  }
+  return String(t);
+}
 
 // Dynamically import chart components to prevent SSR hydration mismatch with Canvas
 const LightweightChart = dynamic(
@@ -166,7 +194,7 @@ function generateCandles(basePrice: number, count: number = 60): CandleData[] {
 
 export default function TerminalHome() {
   const [selectedSymbol, setSelectedSymbol] = useState("XAUUSD");
-  const [timeframe, setTimeframe] = useState("4h");
+  const [timeframe, setTimeframe] = useState("1D");
   const [chartMode, setChartMode] = useState<"quant" | "tradingview">("quant");
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>(DEFAULT_WATCHLIST);
   const [fullCandles, setFullCandles] = useState<CandleData[]>([]);
@@ -174,6 +202,11 @@ export default function TerminalHome() {
   const [isLoadingCandles, setIsLoadingCandles] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
+
+  // Historical Date Range State (2021 to 2026 / Now)
+  const [startDate, setStartDate] = useState("2021-01-11");
+  const [endDate, setEndDate] = useState("2026-10-19");
+  const [isEndDateNow, setIsEndDateNow] = useState(true);
 
   // Bar Replay Simulator State
   const [replayIndex, setReplayIndex] = useState(15);
@@ -211,51 +244,56 @@ export default function TerminalHome() {
     loadWatchlist();
   }, []);
 
-  // 2. Fetch real candles whenever selectedSymbol or timeframe changes
-  useEffect(() => {
-    let isCancelled = false;
-    async function loadCandles() {
-      setIsLoadingCandles(true);
-      setIsPlaying(false);
-      setActivePosition(null);
-      setSimulationTrades([]);
-      try {
-        const res = await fetch(`/api/market/candles?symbol=${selectedSymbol}&timeframe=${timeframe}`);
-        if (res.ok) {
-          const json = await res.json();
-          if (!isCancelled && json.candles && json.candles.length > 0) {
-            setFullCandles(json.candles);
-            const startIdx = Math.max(10, Math.floor(json.candles.length * 0.35));
-            setReplayIndex(startIdx);
+  // Universal Candle Loader for specific symbol, timeframe, and date range
+  const loadCandles = async (
+    sym = selectedSymbol,
+    tf = timeframe,
+    start = startDate,
+    end = isEndDateNow ? "now" : endDate
+  ) => {
+    setIsLoadingCandles(true);
+    setIsPlaying(false);
+    setActivePosition(null);
+    setSimulationTrades([]);
+    try {
+      const url = `/api/market/candles?symbol=${sym}&timeframe=${tf}&startDate=${start}&endDate=${end}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.candles && json.candles.length > 0) {
+          setFullCandles(json.candles);
+          const startIdx = Math.max(5, Math.min(25, Math.floor(json.candles.length * 0.15)));
+          setReplayIndex(startIdx);
 
-            // Compute initial pools on past candles
-            const initRes = stepReplaySimulation(json.candles, startIdx, null, selectedSymbol, timeframe);
-            if (initRes.activePools && initRes.activePools.length > 0) {
-              setPools(initRes.activePools);
-            }
-
-            if (json.exhaustion) {
-              setRealExhaustion(json.exhaustion);
-            }
-            setIsLoadingCandles(false);
-            return;
+          // Compute initial pools on past candles
+          const initRes = stepReplaySimulation(json.candles, startIdx, null, sym, tf);
+          if (initRes.activePools && initRes.activePools.length > 0) {
+            setPools(initRes.activePools);
           }
+
+          if (json.exhaustion) {
+            setRealExhaustion(json.exhaustion);
+          }
+          setReplayAlert(
+            `📊 Berhasil memuat ${json.candles.length} candle [${tf}] dari ${start} s.d ${end === "now" ? "Sekarang" : end}. Siap simulasi replay & backtest!`
+          );
+          setIsLoadingCandles(false);
+          return;
         }
-      } catch (e) {
-        console.error("Error fetching real candles:", e);
       }
-      if (!isCancelled) {
-        const fallback = generateCandles(activeAsset.last_price, 50);
-        setFullCandles(fallback);
-        setReplayIndex(15);
-        setIsLoadingCandles(false);
-      }
+    } catch (e) {
+      console.error("Error fetching historical candles:", e);
     }
-    loadCandles();
-    return () => {
-      isCancelled = true;
-    };
-  }, [selectedSymbol, timeframe, activeAsset.last_price]);
+    const fallback = generateCandles(activeAsset.last_price, 80);
+    setFullCandles(fallback);
+    setReplayIndex(15);
+    setIsLoadingCandles(false);
+  };
+
+  // 2. Fetch candles whenever selectedSymbol or timeframe changes
+  useEffect(() => {
+    loadCandles(selectedSymbol, timeframe, startDate, isEndDateNow ? "now" : endDate);
+  }, [selectedSymbol, timeframe]);
 
   // Step Replay Forward Handler
   const handleStepForward = () => {
@@ -518,73 +556,163 @@ export default function TerminalHome() {
       <main className="grid grid-cols-1 gap-6 p-6 xl:grid-cols-12">
         {/* Left Column: Interactive Lightweight Chart + Timeframe Tabs + Bar Replay Engine (8 cols) */}
         <div className="space-y-4 xl:col-span-8">
-          {/* Timeframe & Chart Engine Controls Bar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-[#1F2430] bg-[#0E1118] px-4 py-2.5">
-            {/* Chart Engine Selector */}
-            <div className="flex items-center gap-1.5 border-r border-[#1F2430] pr-3">
-              <button
-                onClick={() => setChartMode("quant")}
-                className={`rounded px-3 py-1 font-mono text-xs font-bold transition ${
-                  chartMode === "quant"
-                    ? "bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/60 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
-                    : "text-[#8E9BAE] hover:text-[#E2E8F0]"
-                }`}
-              >
-                QUANT REPLAY ENGINE
-              </button>
-              <button
-                onClick={() => setChartMode("tradingview")}
-                className={`rounded px-3 py-1 font-mono text-xs font-bold transition ${
-                  chartMode === "tradingview"
-                    ? "bg-[#38BDF8]/20 text-[#38BDF8] border border-[#38BDF8]/60 shadow-[0_0_10px_rgba(56,189,248,0.2)]"
-                    : "text-[#8E9BAE] hover:text-[#E2E8F0]"
-                }`}
-              >
-                TRADINGVIEW PRO (LIVE)
-              </button>
-            </div>
-
-            {/* Timeframe Pills */}
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-xs text-[#8E9BAE]">CYCLE:</span>
-              {(["1M", "1W", "1D", "4h", "1h"] as const).map((tf) => (
+          {/* 1. Timeframe & Chart Engine Controls Bar */}
+          <div className="space-y-2 rounded border border-[#1F2430] bg-[#0E1118] p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              {/* Chart Engine Selector */}
+              <div className="flex items-center gap-1.5 border-r border-[#1F2430] pr-3">
                 <button
-                  key={tf}
-                  onClick={() => setTimeframe(tf)}
-                  className={`rounded px-2.5 py-1 font-mono text-xs font-medium transition ${
-                    timeframe === tf
-                      ? "bg-[#1E293B] text-[#38BDF8] border border-[#38BDF8]/40"
+                  onClick={() => setChartMode("quant")}
+                  className={`rounded px-3 py-1 font-mono text-xs font-bold transition ${
+                    chartMode === "quant"
+                      ? "bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/60 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
                       : "text-[#8E9BAE] hover:text-[#E2E8F0]"
                   }`}
                 >
-                  {tf}
+                  QUANT REPLAY ENGINE
+                </button>
+                <button
+                  onClick={() => setChartMode("tradingview")}
+                  className={`rounded px-3 py-1 font-mono text-xs font-bold transition ${
+                    chartMode === "tradingview"
+                      ? "bg-[#38BDF8]/20 text-[#38BDF8] border border-[#38BDF8]/60 shadow-[0_0_10px_rgba(56,189,248,0.2)]"
+                      : "text-[#8E9BAE] hover:text-[#E2E8F0]"
+                  }`}
+                >
+                  TRADINGVIEW PRO (LIVE)
+                </button>
+              </div>
+
+              {/* Volatility & Feed Status */}
+              <div className="flex items-center gap-4 text-xs font-mono">
+                <span className="text-[#8E9BAE]">
+                  DAILY MOVE:{" "}
+                  <span className="text-[#E2E8F0] font-semibold">
+                    {realExhaustion ? `${realExhaustion.daily_move_pct}%` : `${activeAsset.change_24h}%`}
+                  </span>
+                </span>
+                <span className="text-[#8E9BAE]">
+                  ATR(14):{" "}
+                  <span className="text-[#E2E8F0] font-semibold">
+                    {realExhaustion ? realExhaustion.atr_14 : "..."}
+                  </span>
+                </span>
+                {isLoadingCandles ? (
+                  <span className="rounded bg-[#1A1F2C] px-2 py-0.5 text-[#38BDF8] font-semibold animate-pulse">
+                    MEMUAT HISTORI...
+                  </span>
+                ) : (
+                  <span className="rounded bg-[#1A1F2C] px-2 py-0.5 text-[#10B981] font-semibold">
+                    FEED AKTIF ({fullCandles.length} BARS)
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* 10 Multi-Timeframe Selector Pills */}
+            <div className="flex flex-wrap items-center gap-1.5 border-t border-[#1F2430]/60 pt-2.5">
+              <span className="font-mono text-xs text-[#8E9BAE] mr-1">TIMEFRAME:</span>
+              {AVAILABLE_TIMEFRAMES.map((tf) => (
+                <button
+                  key={tf.id}
+                  onClick={() => {
+                    setTimeframe(tf.id);
+                    loadCandles(selectedSymbol, tf.id, startDate, isEndDateNow ? "now" : endDate);
+                  }}
+                  className={`rounded px-2.5 py-1 font-mono text-xs font-semibold transition ${
+                    timeframe === tf.id
+                      ? "bg-[#38BDF8]/20 text-[#38BDF8] border border-[#38BDF8] shadow-[0_0_8px_rgba(56,189,248,0.25)]"
+                      : "bg-[#141824] text-[#8E9BAE] border border-[#1F2430] hover:border-[#333D52] hover:text-[#E2E8F0]"
+                  }`}
+                  title={tf.desc}
+                >
+                  {tf.label}
                 </button>
               ))}
             </div>
+          </div>
 
-            {/* Volatility & Feed Status */}
-            <div className="flex items-center gap-4 text-xs font-mono">
-              <span className="text-[#8E9BAE]">
-                DAILY MOVE:{" "}
-                <span className="text-[#E2E8F0] font-semibold">
-                  {realExhaustion ? `${realExhaustion.daily_move_pct}%` : `${activeAsset.change_24h}%`}
+          {/* 2. Historical Backtest Date Range Configurator Bar */}
+          <div className="rounded border border-[#1F2430] bg-[#0E1118] p-3 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-[#38BDF8]" />
+                <span className="font-mono text-xs font-bold text-[#F8FAFC]">
+                  RANGE HISTORI BACKTEST (2021 s.d SEKARANG):
                 </span>
-              </span>
-              <span className="text-[#8E9BAE]">
-                ATR(14):{" "}
-                <span className="text-[#E2E8F0] font-semibold">
-                  {realExhaustion ? realExhaustion.atr_14 : "..."}
-                </span>
-              </span>
-              {isLoadingCandles ? (
-                <span className="rounded bg-[#1A1F2C] px-2 py-0.5 text-[#38BDF8] font-semibold animate-pulse">
-                  FETCHING LIVE FEED...
-                </span>
-              ) : (
-                <span className="rounded bg-[#1A1F2C] px-2 py-0.5 text-[#10B981] font-semibold">
-                  LIVE REAL-TIME FEED
-                </span>
-              )}
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-mono text-[10px] text-[#64748B]">PRESETS:</span>
+                {[
+                  { label: "2021 s.d Sekarang", start: "2021-01-11", now: true },
+                  { label: "2022 s.d Sekarang", start: "2022-01-01", now: true },
+                  { label: "2023 s.d Sekarang", start: "2023-01-01", now: true },
+                  { label: "1 Thn Terakhir", start: "2023-10-19", now: true },
+                  { label: "6 Bln Terakhir", start: "2024-04-19", now: true },
+                ].map((preset) => (
+                  <button
+                    key={preset.label}
+                    onClick={() => {
+                      setStartDate(preset.start);
+                      setIsEndDateNow(preset.now);
+                      loadCandles(selectedSymbol, timeframe, preset.start, preset.now ? "now" : endDate);
+                    }}
+                    className={`rounded border px-2 py-0.5 font-mono text-[10px] transition ${
+                      startDate === preset.start && isEndDateNow === preset.now
+                        ? "border-[#38BDF8] bg-[#38BDF8]/15 text-[#38BDF8] font-bold"
+                        : "border-[#1F2430] bg-[#141824] text-[#94A3B8] hover:border-[#38BDF8] hover:text-[#E2E8F0]"
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Date Inputs & Load Action */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#1F2430]/60 pt-2">
+              <div className="flex flex-wrap items-center gap-2 font-mono text-xs">
+                <span className="text-[#8E9BAE]">DARI:</span>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="rounded border border-[#1F2430] bg-[#121622] px-2 py-1 text-xs text-[#E2E8F0] focus:border-[#38BDF8] focus:outline-none"
+                />
+
+                <span className="text-[#8E9BAE]">SAMPAI:</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  disabled={isEndDateNow}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="rounded border border-[#1F2430] bg-[#121622] px-2 py-1 text-xs text-[#E2E8F0] disabled:opacity-40 focus:border-[#38BDF8] focus:outline-none"
+                />
+
+                <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-[#94A3B8] select-none">
+                  <input
+                    type="checkbox"
+                    checked={isEndDateNow}
+                    onChange={(e) => setIsEndDateNow(e.target.checked)}
+                    className="accent-[#38BDF8] rounded"
+                  />
+                  <span>Sampai Sekarang (Now)</span>
+                </label>
+              </div>
+
+              {/* Load Action Button */}
+              <button
+                onClick={() =>
+                  loadCandles(selectedSymbol, timeframe, startDate, isEndDateNow ? "now" : endDate)
+                }
+                disabled={isLoadingCandles}
+                className="flex items-center gap-1.5 rounded border border-[#10B981] bg-[#10B981]/20 px-3 py-1 font-mono text-xs font-bold text-[#10B981] hover:bg-[#10B981]/30 active:scale-95 transition disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${isLoadingCandles ? "animate-spin" : ""}`} />
+                <span>{isLoadingCandles ? "MEMUAT DATA..." : "TARIK DATA & MULAI BACKTEST"}</span>
+              </button>
             </div>
           </div>
 
@@ -598,7 +726,7 @@ export default function TerminalHome() {
                     BAR REPLAY CONTROLLER:
                   </span>
                   <span className="rounded bg-[#141824] px-2 py-0.5 font-mono text-[11px] text-[#94A3B8] border border-[#1F2430]">
-                    BAR {replayIndex + 1} / {fullCandles.length} ({currentBar?.time || "..."})
+                    BAR {replayIndex + 1} / {fullCandles.length} ({formatBarTime(currentBar?.time)})
                   </span>
                 </div>
 
@@ -769,7 +897,7 @@ export default function TerminalHome() {
 
           {/* Interactive Chart Component */}
           {chartMode === "tradingview" ? (
-            <TradingViewWidget symbol={activeAsset.symbol} height={520} />
+            <TradingViewWidget symbol={activeAsset.symbol} timeframe={timeframe} height={520} />
           ) : (
             <LightweightChart
               symbol={activeAsset.symbol}
@@ -826,7 +954,7 @@ export default function TerminalHome() {
                   {/* Pin Active Trade on Top if Open */}
                   {activePosition && (
                     <tr className="bg-[#102038]/60 hover:bg-[#102038]">
-                      <td className="py-2.5 text-[#38BDF8] font-bold">{activePosition.entry_time}</td>
+                      <td className="py-2.5 text-[#38BDF8] font-bold">{formatBarTime(activePosition.entry_time)}</td>
                       <td className="py-2.5 text-[#94A3B8] italic">Running...</td>
                       <td className="py-2.5 font-bold text-[#E2E8F0]">{activePosition.symbol}</td>
                       <td className="py-2.5">
@@ -866,8 +994,8 @@ export default function TerminalHome() {
                   {/* Completed Simulation Trades */}
                   {simulationTrades.map((t) => (
                     <tr key={t.trade_id} className="hover:bg-[#141824]">
-                      <td className="py-2.5 text-[#94A3B8]">{t.entry_time}</td>
-                      <td className="py-2.5 text-[#94A3B8]">{t.exit_time}</td>
+                      <td className="py-2.5 text-[#94A3B8]">{formatBarTime(t.entry_time)}</td>
+                      <td className="py-2.5 text-[#94A3B8]">{formatBarTime(t.exit_time)}</td>
                       <td className="py-2.5 font-bold text-[#E2E8F0]">{t.asset}</td>
                       <td className="py-2.5">
                         <span

@@ -6,7 +6,7 @@ export interface MappedLiquidityPool {
   pool_price: number;
   retail_rr: number;
   status: "SWEPT" | "PENDING";
-  swept_at?: string | null;
+  swept_at?: string | number | null;
   wick_ratio?: number;
   rvol?: number;
 }
