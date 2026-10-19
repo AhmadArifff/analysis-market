@@ -27,6 +27,7 @@ import type { CandleData, LiquidityPool } from "@/components/LightweightChart";
 import {
   ActivePosition,
   ReplayTrade,
+  TradeDirectionFilter,
   stepReplaySimulation,
   runFullAutomatedBacktest,
 } from "@/lib/quant-engine/simulator";
@@ -215,6 +216,7 @@ export default function TerminalHome() {
   const [activePosition, setActivePosition] = useState<ActivePosition | null>(null);
   const [simulationTrades, setSimulationTrades] = useState<ReplayTrade[]>([]);
   const [replayAlert, setReplayAlert] = useState<string | null>(null);
+  const [directionFilter, setDirectionFilter] = useState<TradeDirectionFilter>("AUTO");
 
   const [realExhaustion, setRealExhaustion] = useState<{
     consecutive_bars: number;
@@ -266,7 +268,7 @@ export default function TerminalHome() {
           setReplayIndex(startIdx);
 
           // Compute initial pools on past candles
-          const initRes = stepReplaySimulation(json.candles, startIdx, null, sym, tf);
+          const initRes = stepReplaySimulation(json.candles, startIdx, null, sym, tf, directionFilter);
           if (initRes.activePools && initRes.activePools.length > 0) {
             setPools(initRes.activePools);
           }
@@ -311,7 +313,8 @@ export default function TerminalHome() {
       nextIndex,
       activePosition,
       activeAsset.symbol,
-      timeframe
+      timeframe,
+      directionFilter
     );
 
     if (stepResult.activePools && stepResult.activePools.length > 0) {
@@ -335,7 +338,7 @@ export default function TerminalHome() {
       setIsPlaying(false);
       const prevIdx = replayIndex - 1;
       setReplayIndex(prevIdx);
-      const res = stepReplaySimulation(fullCandles, prevIdx, activePosition, activeAsset.symbol, timeframe);
+      const res = stepReplaySimulation(fullCandles, prevIdx, activePosition, activeAsset.symbol, timeframe, directionFilter);
       if (res.activePools) setPools(res.activePools);
       setActivePosition(res.newPosition);
     }
@@ -348,7 +351,7 @@ export default function TerminalHome() {
     setSimulationTrades([]);
     const startIdx = Math.max(10, Math.floor(fullCandles.length * 0.35));
     setReplayIndex(startIdx);
-    const res = stepReplaySimulation(fullCandles, startIdx, null, activeAsset.symbol, timeframe);
+    const res = stepReplaySimulation(fullCandles, startIdx, null, activeAsset.symbol, timeframe, directionFilter);
     if (res.activePools) setPools(res.activePools);
     setReplayAlert("🔄 Bar Replay di-reset ke histori masa lalu.");
   };
@@ -356,12 +359,12 @@ export default function TerminalHome() {
   // Run Full Automated Backtest across history
   const handleRunFullBacktest = () => {
     setIsPlaying(false);
-    const result = runFullAutomatedBacktest(fullCandles, activeAsset.symbol, timeframe);
+    const result = runFullAutomatedBacktest(fullCandles, activeAsset.symbol, timeframe, directionFilter);
     setSimulationTrades(result.trades);
     setActivePosition(null);
     setReplayIndex(fullCandles.length - 1);
     setReplayAlert(
-      `⚡ Full Backtest Selesai! ${result.trades.length} trade dieksekusi. Win Rate: ${result.summary.win_rate}%, Net Return: ${result.summary.net_return_pct}%`
+      `⚡ Full Backtest Selesai! ${result.trades.length} trade dieksekusi [Bias: ${directionFilter}]. Win Rate: ${result.summary.win_rate}%, Net Return: ${result.summary.net_return_pct}%`
     );
   };
 
@@ -372,7 +375,7 @@ export default function TerminalHome() {
       handleStepForward();
     }, playSpeed);
     return () => clearInterval(timer);
-  }, [isPlaying, replayIndex, fullCandles, playSpeed, activePosition]);
+  }, [isPlaying, replayIndex, fullCandles, playSpeed, activePosition, directionFilter]);
 
   // Dynamic KPI Metrics derived from simulationTrades
   const winningTrades = simulationTrades.filter((t) => t.result === "WIN");
@@ -805,6 +808,42 @@ export default function TerminalHome() {
                     ))}
                   </div>
 
+                  {/* Trade Direction Selector */}
+                  <div className="flex items-center rounded border border-[#1F2430] bg-[#141824] p-0.5">
+                    <span className="px-1.5 font-mono text-[9px] font-bold text-[#64748B] uppercase">BIAS:</span>
+                    {[
+                      { id: "AUTO", label: "AUTO" },
+                      { id: "LONG", label: "LONG" },
+                      { id: "SHORT", label: "SHORT" },
+                      { id: "ALL", label: "ALL" },
+                    ].map((dir) => (
+                      <button
+                        key={dir.id}
+                        onClick={() => setDirectionFilter(dir.id as TradeDirectionFilter)}
+                        className={`px-2 py-0.5 font-mono text-[10px] font-bold rounded transition ${
+                          directionFilter === dir.id
+                            ? dir.id === "LONG"
+                              ? "bg-[#10B981] text-[#090A0F]"
+                              : dir.id === "SHORT"
+                              ? "bg-[#F43F5E] text-white"
+                              : "bg-[#38BDF8] text-[#090A0F]"
+                            : "text-[#64748B] hover:text-[#94A3B8]"
+                        }`}
+                        title={
+                          dir.id === "AUTO"
+                            ? "Auto Trend Confluence (Long saat uptrend, Short saat downtrend & climax)"
+                            : dir.id === "LONG"
+                            ? "Hanya sweep likuiditas Buy Stop-Loss (Dip Buy)"
+                            : dir.id === "SHORT"
+                            ? "Hanya sweep likuiditas Sell Stop-Loss (Rally Sell)"
+                            : "Semua sweep tanpa filter arah"
+                        }
+                      >
+                        {dir.label}
+                      </button>
+                    ))}
+                  </div>
+
                   {/* Instant Full Backtest Button */}
                   <button
                     onClick={handleRunFullBacktest}
@@ -828,7 +867,7 @@ export default function TerminalHome() {
                   onChange={(e) => {
                     const idx = parseInt(e.target.value);
                     setReplayIndex(idx);
-                    const res = stepReplaySimulation(fullCandles, idx, activePosition, activeAsset.symbol, timeframe);
+                    const res = stepReplaySimulation(fullCandles, idx, activePosition, activeAsset.symbol, timeframe, directionFilter);
                     if (res.activePools) setPools(res.activePools);
                     setActivePosition(res.newPosition);
                   }}

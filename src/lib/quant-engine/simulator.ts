@@ -3,8 +3,10 @@
  * Executes exact liquidity sweep algorithms candle-by-candle with zero look-ahead bias.
  */
 
-import { Candle, findFractals } from "./indicators";
+import { Candle, findFractals, calculateEMA, calculateRSI } from "./indicators";
 import { evaluateExhaustion } from "./exhaustion";
+
+export type TradeDirectionFilter = "AUTO" | "LONG" | "SHORT" | "ALL";
 
 export interface ActivePosition {
   trade_id: number;
@@ -52,14 +54,15 @@ export interface SimulationStepResult {
 }
 
 /**
- * Evaluates a single bar step in the replay simulation
+ * Evaluates a single bar step in the replay simulation with institutional trend confluence
  */
 export function stepReplaySimulation(
   allCandles: Candle[],
   currentIndex: number,
   currentPosition: ActivePosition | null,
   symbol: string,
-  timeframe: string = "4h"
+  timeframe: string = "4h",
+  directionFilter: TradeDirectionFilter = "AUTO"
 ): SimulationStepResult {
   if (currentIndex < 5 || currentIndex >= allCandles.length) {
     return {
@@ -181,6 +184,12 @@ export function stepReplaySimulation(
   const lastHigh = swingHighs[swingHighs.length - 1];
   const lastLow = swingLows[swingLows.length - 1];
 
+  // Internal Range Liquidity (Pullback highs/lows from recent 5-8 bars)
+  const pullbackLookback = Math.min(6, Math.max(3, pastCandles.length - 1));
+  const recentSlice = pastCandles.slice(-pullbackLookback);
+  const recentMinLow = recentSlice.length > 0 ? Math.min(...recentSlice.map((c) => c.low)) : (lastLow?.price || 0);
+  const recentMaxHigh = recentSlice.length > 0 ? Math.max(...recentSlice.map((c) => c.high)) : (lastHigh?.price || Infinity);
+
   const activePools: {
     pool_id: number;
     pool_type: "BUY_SL" | "SELL_SL";
@@ -190,33 +199,58 @@ export function stepReplaySimulation(
     swept_ago?: string | null;
   }[] = [];
 
-  // Add recent swing lows as Buy SL pools
-  swingLows.slice(-2).forEach((low, idx) => {
-    const isSwept = currentBar.low <= low.price;
+  // Add recent swing lows & pullback low as Buy SL pools
+  const effectiveLow = Math.max(recentMinLow, lastLow ? lastLow.price : 0);
+  if (effectiveLow > 0) {
+    const isSwept = currentBar.low <= effectiveLow;
     activePools.push({
-      pool_id: 100 + idx,
+      pool_id: 101,
       pool_type: "BUY_SL",
-      pool_price: parseFloat(low.price.toFixed(low.price < 1 ? 6 : 2)),
-      retail_rr: 1.85 + idx * 0.25,
+      pool_price: parseFloat(effectiveLow.toFixed(effectiveLow < 1 ? 6 : 2)),
+      retail_rr: 1.85,
       status: isSwept ? "SWEPT" : "PENDING",
       swept_ago: isSwept ? `Swept at bar ${currentIndex}` : null,
     });
-  });
+  }
 
-  // Add recent swing highs as Sell SL pools
-  swingHighs.slice(-2).forEach((high, idx) => {
-    const isSwept = currentBar.high >= high.price;
+  // Add recent swing highs & pullback high as Sell SL pools
+  const effectiveHigh = Math.min(recentMaxHigh, lastHigh ? lastHigh.price : Infinity);
+  if (effectiveHigh < Infinity) {
+    const isSwept = currentBar.high >= effectiveHigh;
     activePools.push({
-      pool_id: 200 + idx,
+      pool_id: 201,
       pool_type: "SELL_SL",
-      pool_price: parseFloat(high.price.toFixed(high.price < 1 ? 6 : 2)),
-      retail_rr: 2.1 + idx * 0.3,
+      pool_price: parseFloat(effectiveHigh.toFixed(effectiveHigh < 1 ? 6 : 2)),
+      retail_rr: 2.1,
       status: isSwept ? "SWEPT" : "PENDING",
       swept_ago: isSwept ? `Swept at bar ${currentIndex}` : null,
     });
-  });
+  }
 
-  // 3. If no active position, check if current bar triggers a valid Liquidity Sweep Entry!
+  // 3. Compute Macro Trend Confluence (EMA) and Time-Bar Exhaustion
+  const closes = pastCandles.map((c) => c.close);
+  const emaPeriod = Math.min(21, Math.max(5, Math.floor(pastCandles.length / 2)));
+  const emaVals = calculateEMA(closes, emaPeriod);
+  const currentEma = emaVals[emaVals.length - 1] || currentBar.close;
+  const isUptrend = currentBar.close >= currentEma;
+
+  const rsiVals = calculateRSI(closes, 5);
+  const fastRsi = rsiVals[rsiVals.length - 1] || 50;
+
+  let consecutiveBars = 1;
+  if (pastCandles.length >= 2) {
+    const lastBar = pastCandles[pastCandles.length - 1];
+    const isBull = lastBar.close >= lastBar.open;
+    for (let k = pastCandles.length - 2; k >= 0; k--) {
+      if ((pastCandles[k].close >= pastCandles[k].open) === isBull) {
+        consecutiveBars++;
+      } else {
+        break;
+      }
+    }
+  }
+
+  // 4. If no active position, evaluate Liquidity Sweep Entry with Confluence Guards
   if (!activePos) {
     const range = currentBar.high - currentBar.low;
     if (range > 0) {
@@ -225,70 +259,101 @@ export function stepReplaySimulation(
       const lowerWickRatio = lowerWick / range;
       const upperWickRatio = upperWick / range;
 
-      // Condition A: Bullish Sweep of Retail Buy Stop-Loss
-      // Price pushed lower than swing low, but rejected and closed back above the swing low
-      if (lastLow && currentBar.low < lastLow.price && currentBar.close > lastLow.price) {
-        if (lowerWickRatio >= 0.20) {
-          const risk = Math.max(currentBar.close - currentBar.low, currentBar.close * 0.005);
-          const sl = currentBar.low - risk * 0.1;
-          // Target minimum RR 1:2, or the opposing swing high
-          const targetDistance = (currentBar.close - sl) * 2;
-          const tp = (lastHigh && lastHigh.price > currentBar.close)
+      // Buy SL Sweep Condition (Price dips below recent low/pullback to sweep retail stops, then rejects up)
+      const buySweepLevel = Math.max(recentMinLow, lastLow ? lastLow.price : 0);
+      const isBuySweep =
+        currentBar.low < buySweepLevel &&
+        currentBar.close > buySweepLevel &&
+        lowerWickRatio >= 0.20;
+
+      // Sell SL Sweep Condition (Price spikes above recent high/pullback to sweep retail stops, then rejects down)
+      const sellSweepLevel = Math.min(recentMaxHigh, lastHigh ? lastHigh.price : Infinity);
+      const isSellSweep =
+        currentBar.high > sellSweepLevel &&
+        currentBar.close < sellSweepLevel &&
+        upperWickRatio >= 0.20;
+
+      let allowLong = false;
+      let allowShort = false;
+
+      if (directionFilter === "LONG") {
+        allowLong = isBuySweep;
+      } else if (directionFilter === "SHORT") {
+        allowShort = isSellSweep;
+      } else if (directionFilter === "AUTO") {
+        // Confluence Protocol (C-QUANT-07 & PRD 4.1):
+        // In Uptrend: Trend-confluent dip buy is primary. Counter-trend shorts ONLY on Exhaustion Climax.
+        if (isUptrend) {
+          allowLong = isBuySweep;
+          allowShort = isSellSweep && (fastRsi >= 72 || consecutiveBars >= 4 || upperWickRatio >= 0.35);
+        } else {
+          // In Downtrend: Trend-confluent rally sell is primary. Counter-trend longs ONLY on Exhaustion Climax.
+          allowShort = isSellSweep;
+          allowLong = isBuySweep && (fastRsi <= 28 || consecutiveBars >= 4 || lowerWickRatio >= 0.35);
+        }
+      } else {
+        // ALL (Bi-directional)
+        allowLong = isBuySweep;
+        allowShort = isSellSweep;
+      }
+
+      // Execute LONG
+      if (allowLong) {
+        const risk = Math.max(currentBar.close - currentBar.low, currentBar.close * 0.005);
+        const sl = currentBar.low - risk * 0.1;
+        const targetDistance = (currentBar.close - sl) * 2;
+        const tp =
+          lastHigh && lastHigh.price > currentBar.close
             ? Math.max(lastHigh.price, currentBar.close + targetDistance)
             : currentBar.close + targetDistance;
 
-          activePos = {
-            trade_id: Date.now() + Math.floor(Math.random() * 1000),
-            symbol,
-            side: "LONG",
-            entry_time: currentBar.time,
-            entry_index: currentIndex,
-            entry_px: parseFloat(currentBar.close.toFixed(currentBar.close < 1 ? 6 : 2)),
-            sl_px: parseFloat(sl.toFixed(currentBar.close < 1 ? 6 : 2)),
-            tp_px: parseFloat(tp.toFixed(currentBar.close < 1 ? 6 : 2)),
-            confluence_score: 85,
-            swept_pool_price: lastLow.price,
-            setup_type: "RETAIL_BUY_SL_SWEEP",
-          };
+        activePos = {
+          trade_id: Date.now() + Math.floor(Math.random() * 1000),
+          symbol,
+          side: "LONG",
+          entry_time: currentBar.time,
+          entry_index: currentIndex,
+          entry_px: parseFloat(currentBar.close.toFixed(currentBar.close < 1 ? 6 : 2)),
+          sl_px: parseFloat(sl.toFixed(currentBar.close < 1 ? 6 : 2)),
+          tp_px: parseFloat(tp.toFixed(currentBar.close < 1 ? 6 : 2)),
+          confluence_score: isUptrend ? 90 : 80,
+          swept_pool_price: buySweepLevel,
+          setup_type: isUptrend ? "TREND_DIP_BUY_SL_SWEEP" : "COUNTER_EXHAUSTION_BUY_SL_SWEEP",
+        };
 
-          const pool = activePools.find((p) => p.pool_type === "BUY_SL");
-          if (pool) pool.status = "SWEPT";
+        const pool = activePools.find((p) => p.pool_type === "BUY_SL");
+        if (pool) pool.status = "SWEPT";
 
-          alertMessage = `🚨 LIQUIDITY SWEEP ENTRY! LONG @ $${activePos.entry_px} (SL: $${activePos.sl_px}, TP: $${activePos.tp_px})`;
-        }
+        alertMessage = `🚨 LIQUIDITY SWEEP ENTRY! LONG @ $${activePos.entry_px} (SL: $${activePos.sl_px}, TP: $${activePos.tp_px}) [${isUptrend ? "Trend-Confluent" : "Exhaustion Climax"}]`;
       }
-
-      // Condition B: Bearish Sweep of Retail Sell Stop-Loss
-      // Price pushed higher than swing high, but rejected and closed back below the swing high
-      else if (lastHigh && currentBar.high > lastHigh.price && currentBar.close < lastHigh.price) {
-        if (upperWickRatio >= 0.20) {
-          const risk = Math.max(currentBar.high - currentBar.close, currentBar.close * 0.005);
-          const sl = currentBar.high + risk * 0.1;
-          // Target minimum RR 1:2, or the opposing swing low
-          const targetDistance = (sl - currentBar.close) * 2;
-          const tp = (lastLow && lastLow.price < currentBar.close)
+      // Execute SHORT
+      else if (allowShort) {
+        const risk = Math.max(currentBar.high - currentBar.close, currentBar.close * 0.005);
+        const sl = currentBar.high + risk * 0.1;
+        const targetDistance = (sl - currentBar.close) * 2;
+        const tp =
+          lastLow && lastLow.price < currentBar.close
             ? Math.min(lastLow.price, currentBar.close - targetDistance)
             : currentBar.close - targetDistance;
 
-          activePos = {
-            trade_id: Date.now() + Math.floor(Math.random() * 1000),
-            symbol,
-            side: "SHORT",
-            entry_time: currentBar.time,
-            entry_index: currentIndex,
-            entry_px: parseFloat(currentBar.close.toFixed(currentBar.close < 1 ? 6 : 2)),
-            sl_px: parseFloat(sl.toFixed(currentBar.close < 1 ? 6 : 2)),
-            tp_px: parseFloat(tp.toFixed(currentBar.close < 1 ? 6 : 2)),
-            confluence_score: 85,
-            swept_pool_price: lastHigh.price,
-            setup_type: "RETAIL_SELL_SL_SWEEP",
-          };
+        activePos = {
+          trade_id: Date.now() + Math.floor(Math.random() * 1000),
+          symbol,
+          side: "SHORT",
+          entry_time: currentBar.time,
+          entry_index: currentIndex,
+          entry_px: parseFloat(currentBar.close.toFixed(currentBar.close < 1 ? 6 : 2)),
+          sl_px: parseFloat(sl.toFixed(currentBar.close < 1 ? 6 : 2)),
+          tp_px: parseFloat(tp.toFixed(currentBar.close < 1 ? 6 : 2)),
+          confluence_score: !isUptrend ? 90 : 80,
+          swept_pool_price: sellSweepLevel,
+          setup_type: !isUptrend ? "TREND_RALLY_SELL_SL_SWEEP" : "COUNTER_EXHAUSTION_SELL_SL_SWEEP",
+        };
 
-          const pool = activePools.find((p) => p.pool_type === "SELL_SL");
-          if (pool) pool.status = "SWEPT";
+        const pool = activePools.find((p) => p.pool_type === "SELL_SL");
+        if (pool) pool.status = "SWEPT";
 
-          alertMessage = `🚨 LIQUIDITY SWEEP ENTRY! SHORT @ $${activePos.entry_px} (SL: $${activePos.sl_px}, TP: $${activePos.tp_px})`;
-        }
+        alertMessage = `🚨 LIQUIDITY SWEEP ENTRY! SHORT @ $${activePos.entry_px} (SL: $${activePos.sl_px}, TP: $${activePos.tp_px}) [${!isUptrend ? "Trend-Confluent" : "Exhaustion Climax"}]`;
       }
     }
   }
@@ -307,7 +372,8 @@ export function stepReplaySimulation(
 export function runFullAutomatedBacktest(
   candles: Candle[],
   symbol: string,
-  timeframe: string = "4h"
+  timeframe: string = "4h",
+  directionFilter: TradeDirectionFilter = "AUTO"
 ): {
   trades: ReplayTrade[];
   summary: {
@@ -324,7 +390,7 @@ export function runFullAutomatedBacktest(
   let currentPos: ActivePosition | null = null;
 
   for (let i = 10; i < candles.length; i++) {
-    const result = stepReplaySimulation(candles, i, currentPos, symbol, timeframe);
+    const result = stepReplaySimulation(candles, i, currentPos, symbol, timeframe, directionFilter);
     if (result.closedTrade) {
       trades.push(result.closedTrade);
     }
