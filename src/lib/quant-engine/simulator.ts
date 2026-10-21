@@ -1,10 +1,24 @@
 /**
- * Bar Replay & Quantitative Backtest Simulation Engine
+ * Bar Replay & Quantitative Backtest Simulation Engine v2
+ * Integrates AssetProfile adaptive thresholds, ADX trend strength gate,
+ * FVG structure shift, Volume Delta, Session Killzone filter,
+ * and ATR-normalized SL/TP placement.
+ *
  * Executes exact liquidity sweep algorithms candle-by-candle with zero look-ahead bias.
  */
 
-import { Candle, findFractals, calculateEMA, calculateRSI } from "./indicators";
-import { evaluateExhaustion } from "./exhaustion";
+import {
+  Candle,
+  findFractals,
+  calculateEMA,
+  calculateRSI,
+  calculateATR,
+  calculateADX,
+  cumulativeVolumeDelta,
+} from "./indicators";
+import { getAssetProfile, isWithinKillzone, AssetProfile } from "./assetProfile";
+import { evaluateConfluence, ConfluenceInput, ConfluenceEvaluation } from "./confluence";
+import { detectFVGs, updateFVGStatus, findOverlappingFVG, FairValueGap } from "./fvg";
 
 export type TradeDirectionFilter = "AUTO" | "LONG" | "SHORT" | "ALL";
 
@@ -51,10 +65,13 @@ export interface SimulationStepResult {
     status: "SWEPT" | "PENDING";
   }[];
   sweepAlert: string | null;
+  confluenceSnapshot?: ConfluenceEvaluation | null;
+  activeFVGs?: FairValueGap[];
+  adxValue?: number;
 }
 
 /**
- * Evaluates a single bar step in the replay simulation with institutional trend confluence
+ * Evaluates a single bar step in the replay simulation with adaptive confluence
  */
 export function stepReplaySimulation(
   allCandles: Candle[],
@@ -75,102 +92,39 @@ export function stepReplaySimulation(
     };
   }
 
+  const profile = getAssetProfile(symbol);
+  const effectiveWickRatio = Math.max(minWickRatio, profile.minWickRatio);
+  const effectiveRR = Math.max(riskRewardRatio, profile.riskRewardMin);
+
   const currentBar = allCandles[currentIndex];
   let closedTrade: ReplayTrade | null = null;
   let activePos: ActivePosition | null = currentPosition;
   let alertMessage: string | null = null;
+  let confluenceSnapshot: ConfluenceEvaluation | null = null;
 
   // 1. If an active trade is open, check if current bar hits TP or SL
   if (activePos) {
     if (activePos.side === "LONG") {
-      // Check SL hit (worst case first for realistic backtesting)
       if (currentBar.low <= activePos.sl_px) {
         const pnl = ((activePos.sl_px - activePos.entry_px) / activePos.entry_px) * 100;
-        closedTrade = {
-          trade_id: activePos.trade_id,
-          asset: symbol,
-          timeframe,
-          side: "LONG",
-          entry_time: activePos.entry_time,
-          entry_px: activePos.entry_px,
-          sl_px: activePos.sl_px,
-          tp_px: activePos.tp_px,
-          exit_time: currentBar.time,
-          exit_px: activePos.sl_px,
-          confluence_score: activePos.confluence_score,
-          setup_type: activePos.setup_type,
-          pnl_pct: parseFloat(pnl.toFixed(2)),
-          result: "LOSS",
-          notes: `Stopped out @ $${activePos.sl_px}`,
-        };
+        closedTrade = buildClosedTrade(activePos, symbol, timeframe, currentBar, activePos.sl_px, pnl, "LOSS");
         activePos = null;
         alertMessage = `STOP LOSS HIT (LONG @ $${currentBar.low})! Result: ${pnl.toFixed(2)}%`;
       } else if (currentBar.high >= activePos.tp_px) {
-        // Check TP hit
         const pnl = ((activePos.tp_px - activePos.entry_px) / activePos.entry_px) * 100;
-        closedTrade = {
-          trade_id: activePos.trade_id,
-          asset: symbol,
-          timeframe,
-          side: "LONG",
-          entry_time: activePos.entry_time,
-          entry_px: activePos.entry_px,
-          sl_px: activePos.sl_px,
-          tp_px: activePos.tp_px,
-          exit_time: currentBar.time,
-          exit_px: activePos.tp_px,
-          confluence_score: activePos.confluence_score,
-          setup_type: activePos.setup_type,
-          pnl_pct: parseFloat(pnl.toFixed(2)),
-          result: "WIN",
-          notes: `Take Profit hit @ $${activePos.tp_px}`,
-        };
+        closedTrade = buildClosedTrade(activePos, symbol, timeframe, currentBar, activePos.tp_px, pnl, "WIN");
         activePos = null;
         alertMessage = `TAKE PROFIT HIT (LONG @ $${currentBar.high})! Result: +${pnl.toFixed(2)}%`;
       }
     } else if (activePos.side === "SHORT") {
-      // Check SL hit
       if (currentBar.high >= activePos.sl_px) {
         const pnl = ((activePos.entry_px - activePos.sl_px) / activePos.entry_px) * 100;
-        closedTrade = {
-          trade_id: activePos.trade_id,
-          asset: symbol,
-          timeframe,
-          side: "SHORT",
-          entry_time: activePos.entry_time,
-          entry_px: activePos.entry_px,
-          sl_px: activePos.sl_px,
-          tp_px: activePos.tp_px,
-          exit_time: currentBar.time,
-          exit_px: activePos.sl_px,
-          confluence_score: activePos.confluence_score,
-          setup_type: activePos.setup_type,
-          pnl_pct: parseFloat(pnl.toFixed(2)),
-          result: "LOSS",
-          notes: `Stopped out @ $${activePos.sl_px}`,
-        };
+        closedTrade = buildClosedTrade(activePos, symbol, timeframe, currentBar, activePos.sl_px, pnl, "LOSS");
         activePos = null;
         alertMessage = `STOP LOSS HIT (SHORT @ $${currentBar.high})! Result: ${pnl.toFixed(2)}%`;
       } else if (currentBar.low <= activePos.tp_px) {
-        // Check TP hit
         const pnl = ((activePos.entry_px - activePos.tp_px) / activePos.entry_px) * 100;
-        closedTrade = {
-          trade_id: activePos.trade_id,
-          asset: symbol,
-          timeframe,
-          side: "SHORT",
-          entry_time: activePos.entry_time,
-          entry_px: activePos.entry_px,
-          sl_px: activePos.sl_px,
-          tp_px: activePos.tp_px,
-          exit_time: currentBar.time,
-          exit_px: activePos.tp_px,
-          confluence_score: activePos.confluence_score,
-          setup_type: activePos.setup_type,
-          pnl_pct: parseFloat(pnl.toFixed(2)),
-          result: "WIN",
-          notes: `Take Profit hit @ $${activePos.tp_px}`,
-        };
+        closedTrade = buildClosedTrade(activePos, symbol, timeframe, currentBar, activePos.tp_px, pnl, "WIN");
         activePos = null;
         alertMessage = `TAKE PROFIT HIT (SHORT @ $${currentBar.low})! Result: +${pnl.toFixed(2)}%`;
       }
@@ -186,7 +140,6 @@ export function stepReplaySimulation(
   const lastHigh = swingHighs[swingHighs.length - 1];
   const lastLow = swingLows[swingLows.length - 1];
 
-  // Internal Range Liquidity (Pullback highs/lows from recent 5-8 bars)
   const pullbackLookback = Math.min(6, Math.max(3, pastCandles.length - 1));
   const recentSlice = pastCandles.slice(-pullbackLookback);
   const recentMinLow = recentSlice.length > 0 ? Math.min(...recentSlice.map((c) => c.low)) : (lastLow?.price || 0);
@@ -201,43 +154,51 @@ export function stepReplaySimulation(
     swept_ago?: string | null;
   }[] = [];
 
-  // Add recent swing lows & pullback low as Buy SL pools
   const effectiveLow = Math.max(recentMinLow, lastLow ? lastLow.price : 0);
   if (effectiveLow > 0) {
     const isSwept = currentBar.low <= effectiveLow;
     activePools.push({
       pool_id: 101,
       pool_type: "BUY_SL",
-      pool_price: parseFloat(effectiveLow.toFixed(effectiveLow < 1 ? 6 : 2)),
+      pool_price: fmtPrice(effectiveLow),
       retail_rr: 1.85,
       status: isSwept ? "SWEPT" : "PENDING",
       swept_ago: isSwept ? `Swept at bar ${currentIndex}` : null,
     });
   }
 
-  // Add recent swing highs & pullback high as Sell SL pools
   const effectiveHigh = Math.min(recentMaxHigh, lastHigh ? lastHigh.price : Infinity);
   if (effectiveHigh < Infinity) {
     const isSwept = currentBar.high >= effectiveHigh;
     activePools.push({
       pool_id: 201,
       pool_type: "SELL_SL",
-      pool_price: parseFloat(effectiveHigh.toFixed(effectiveHigh < 1 ? 6 : 2)),
+      pool_price: fmtPrice(effectiveHigh),
       retail_rr: 2.1,
       status: isSwept ? "SWEPT" : "PENDING",
       swept_ago: isSwept ? `Swept at bar ${currentIndex}` : null,
     });
   }
 
-  // 3. Compute Macro Trend Confluence (EMA) and Time-Bar Exhaustion
+  // 3. Compute technical indicators on past bars
   const closes = pastCandles.map((c) => c.close);
-  const emaPeriod = Math.min(21, Math.max(5, Math.floor(pastCandles.length / 2)));
-  const emaVals = calculateEMA(closes, emaPeriod);
-  const currentEma = emaVals[emaVals.length - 1] || currentBar.close;
-  const isUptrend = currentBar.close >= currentEma;
+
+  const [fastPeriod, slowPeriod] = profile.emaPeriods;
+  const emaFastVals = calculateEMA(closes, Math.min(fastPeriod, Math.max(5, Math.floor(closes.length / 2))));
+  const emaSlowVals = calculateEMA(closes, Math.min(slowPeriod, Math.max(10, Math.floor(closes.length / 2))));
+  const currentEmaFast = emaFastVals[emaFastVals.length - 1] || currentBar.close;
+  const currentEmaSlow = emaSlowVals[emaSlowVals.length - 1] || currentBar.close;
+  const fastAboveSlow = currentEmaFast >= currentEmaSlow;
+  const isUptrend = currentBar.close >= currentEmaFast;
+
+  const adxValues = calculateADX(pastCandles, profile.adxPeriod);
+  const currentADX = adxValues[adxValues.length - 1] || 0;
 
   const rsiVals = calculateRSI(closes, 5);
   const fastRsi = rsiVals[rsiVals.length - 1] || 50;
+
+  const atrValues = calculateATR(pastCandles, 14);
+  const currentATR = atrValues[atrValues.length - 1] || currentBar.close * 0.01;
 
   let consecutiveBars = 1;
   if (pastCandles.length >= 2) {
@@ -252,28 +213,52 @@ export function stepReplaySimulation(
     }
   }
 
-  // 4. If no active position, evaluate Liquidity Sweep Entry with Confluence Guards
+  // Volume metrics
+  const vols = pastCandles.slice(-20).map((c) => c.volume || 1);
+  const avgVol = vols.reduce((a, b) => a + b, 0) / vols.length || 1;
+  const currentRvol = (currentBar.volume || 1) / avgVol;
+  const cvd = cumulativeVolumeDelta(pastCandles, 10);
+
+  // FVG detection on past bars
+  const rawFVGs = detectFVGs(pastCandles);
+  const activeFVGs = updateFVGStatus(rawFVGs, pastCandles).filter((f) => !f.filled);
+
+  // 4. If no active position, evaluate Liquidity Sweep Entry with Adaptive Confluence
   if (!activePos) {
+    // Session Killzone Gate (Forex only)
+    if (!isWithinKillzone(currentBar.time, profile.killzoneHoursUTC)) {
+      return {
+        closedTrade,
+        newPosition: activePos,
+        activePools,
+        sweepAlert: alertMessage || `[KILLZONE FILTER] Outside session window for ${profile.category}`,
+        confluenceSnapshot: null,
+        activeFVGs,
+        adxValue: round2(currentADX),
+      };
+    }
+
+    // ADX Trend Strength Gate
+    const adxGatePass = currentADX >= profile.adxThreshold || pastCandles.length < 30;
+
     const range = currentBar.high - currentBar.low;
-    if (range > 0) {
+    if (range > 0 && adxGatePass) {
       const lowerWick = Math.min(currentBar.open, currentBar.close) - currentBar.low;
       const upperWick = currentBar.high - Math.max(currentBar.open, currentBar.close);
       const lowerWickRatio = lowerWick / range;
       const upperWickRatio = upperWick / range;
 
-      // Buy SL Sweep Condition (Price dips below recent low/pullback to sweep retail stops, then rejects up)
       const buySweepLevel = Math.max(recentMinLow, lastLow ? lastLow.price : 0);
       const isBuySweep =
         currentBar.low < buySweepLevel &&
         currentBar.close > buySweepLevel &&
-        lowerWickRatio >= minWickRatio;
+        lowerWickRatio >= effectiveWickRatio;
 
-      // Sell SL Sweep Condition (Price spikes above recent high/pullback to sweep retail stops, then rejects down)
       const sellSweepLevel = Math.min(recentMaxHigh, lastHigh ? lastHigh.price : Infinity);
       const isSellSweep =
         currentBar.high > sellSweepLevel &&
         currentBar.close < sellSweepLevel &&
-        upperWickRatio >= minWickRatio;
+        upperWickRatio >= effectiveWickRatio;
 
       let allowLong = false;
       let allowShort = false;
@@ -283,79 +268,159 @@ export function stepReplaySimulation(
       } else if (directionFilter === "SHORT") {
         allowShort = isSellSweep;
       } else if (directionFilter === "AUTO") {
-        // Confluence Protocol (C-QUANT-07 & PRD 4.1):
-        // In Uptrend: Trend-confluent dip buy is primary. Counter-trend shorts ONLY on Exhaustion Climax.
         if (isUptrend) {
           allowLong = isBuySweep;
-          allowShort = isSellSweep && (fastRsi >= 72 || consecutiveBars >= 4 || upperWickRatio >= minWickRatio * 1.5);
+          allowShort = isSellSweep && (
+            fastRsi >= profile.rsiOverbought ||
+            consecutiveBars >= profile.maxConsecutiveBars ||
+            upperWickRatio >= effectiveWickRatio * 1.5
+          );
         } else {
-          // In Downtrend: Trend-confluent rally sell is primary. Counter-trend longs ONLY on Exhaustion Climax.
           allowShort = isSellSweep;
-          allowLong = isBuySweep && (fastRsi <= 28 || consecutiveBars >= 4 || lowerWickRatio >= minWickRatio * 1.5);
+          allowLong = isBuySweep && (
+            fastRsi <= profile.rsiOversold ||
+            consecutiveBars >= profile.maxConsecutiveBars ||
+            lowerWickRatio >= effectiveWickRatio * 1.5
+          );
         }
       } else {
-        // ALL (Bi-directional)
         allowLong = isBuySweep;
         allowShort = isSellSweep;
       }
 
-      // Execute LONG
+      // Evaluate confluence for potential LONG
       if (allowLong) {
-        const risk = Math.max(currentBar.close - currentBar.low, currentBar.close * 0.005);
-        const sl = currentBar.low - risk * 0.1;
-        const targetDistance = (currentBar.close - sl) * riskRewardRatio;
-        const tp =
-          lastHigh && lastHigh.price > currentBar.close
-            ? Math.max(lastHigh.price, currentBar.close + targetDistance)
-            : currentBar.close + targetDistance;
+        const fvgMatch = findOverlappingFVG(currentBar, activeFVGs, "LONG");
+        const volumeDeltaAligned = cvd < 0;
 
-        activePos = {
-          trade_id: Date.now() + Math.floor(Math.random() * 1000),
-          symbol,
-          side: "LONG",
-          entry_time: currentBar.time,
-          entry_index: currentIndex,
-          entry_px: parseFloat(currentBar.close.toFixed(currentBar.close < 1 ? 6 : 2)),
-          sl_px: parseFloat(sl.toFixed(currentBar.close < 1 ? 6 : 2)),
-          tp_px: parseFloat(tp.toFixed(currentBar.close < 1 ? 6 : 2)),
-          confluence_score: isUptrend ? 90 : 80,
-          swept_pool_price: buySweepLevel,
-          setup_type: isUptrend ? "TREND_DIP_BUY_SL_SWEEP" : "COUNTER_EXHAUSTION_BUY_SL_SWEEP",
+        const confluenceInput: ConfluenceInput = {
+          fastEmaAboveSlowEma: fastAboveSlow,
+          adxValue: currentADX,
+          adxThreshold: profile.adxThreshold,
+          consecutiveBars,
+          maxConsecutiveThreshold: profile.maxConsecutiveBars,
+          fastRsi,
+          rsiOverbought: profile.rsiOverbought,
+          rsiOversold: profile.rsiOversold,
+          entryDirection: "LONG",
+          fractalPoolMapped: !!lastLow,
+          retailRRVisible: buySweepLevel > 0,
+          wickRatio: lowerWickRatio,
+          minWickRatio: effectiveWickRatio,
+          rvol: currentRvol,
+          minRvol: profile.minRvol,
+          hasFVGOverlap: !!fvgMatch,
+          hasOrderBlock: false,
+          volumeDeltaAligned,
+          rvolSpike: currentRvol >= profile.minRvol,
         };
 
-        const pool = activePools.find((p) => p.pool_type === "BUY_SL");
-        if (pool) pool.status = "SWEPT";
+        const evaluation = evaluateConfluence(confluenceInput, profile);
+        confluenceSnapshot = evaluation;
 
-        alertMessage = `🚨 LIQUIDITY SWEEP ENTRY! LONG @ $${activePos.entry_px} (SL: $${activePos.sl_px}, TP: $${activePos.tp_px}) [${isUptrend ? "Trend-Confluent" : "Exhaustion Climax"}]`;
+        if (evaluation.is_high_probability) {
+          const sl = currentBar.close - currentATR * profile.atrSlMultiplier;
+          const riskDist = currentBar.close - sl;
+          const tp = currentBar.close + riskDist * effectiveRR;
+
+          const finalTP = lastHigh && lastHigh.price > currentBar.close
+            ? Math.max(lastHigh.price, tp)
+            : tp;
+
+          const actualRR = (finalTP - currentBar.close) / riskDist;
+          if (actualRR >= profile.riskRewardMin) {
+            activePos = {
+              trade_id: Date.now() + Math.floor(Math.random() * 1000),
+              symbol,
+              side: "LONG",
+              entry_time: currentBar.time,
+              entry_index: currentIndex,
+              entry_px: fmtPrice(currentBar.close),
+              sl_px: fmtPrice(sl),
+              tp_px: fmtPrice(finalTP),
+              confluence_score: evaluation.score,
+              swept_pool_price: buySweepLevel,
+              setup_type: isUptrend
+                ? `TREND_DIP_BUY [${profile.category}]`
+                : `COUNTER_EXHAUSTION_BUY [${profile.category}]`,
+            };
+
+            const pool = activePools.find((p) => p.pool_type === "BUY_SL");
+            if (pool) pool.status = "SWEPT";
+
+            alertMessage = `LIQUIDITY SWEEP ENTRY! LONG @ $${activePos.entry_px} | Confluence: ${evaluation.score}/100 | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ADX: ${round2(currentADX)} | ${profile.category}${fvgMatch ? " + FVG" : ""}`;
+          }
+        }
       }
-      // Execute SHORT
-      else if (allowShort) {
-        const risk = Math.max(currentBar.high - currentBar.close, currentBar.close * 0.005);
-        const sl = currentBar.high + risk * 0.1;
-        const targetDistance = (sl - currentBar.close) * riskRewardRatio;
-        const tp =
-          lastLow && lastLow.price < currentBar.close
-            ? Math.min(lastLow.price, currentBar.close - targetDistance)
-            : currentBar.close - targetDistance;
 
-        activePos = {
-          trade_id: Date.now() + Math.floor(Math.random() * 1000),
-          symbol,
-          side: "SHORT",
-          entry_time: currentBar.time,
-          entry_index: currentIndex,
-          entry_px: parseFloat(currentBar.close.toFixed(currentBar.close < 1 ? 6 : 2)),
-          sl_px: parseFloat(sl.toFixed(currentBar.close < 1 ? 6 : 2)),
-          tp_px: parseFloat(tp.toFixed(currentBar.close < 1 ? 6 : 2)),
-          confluence_score: !isUptrend ? 90 : 80,
-          swept_pool_price: sellSweepLevel,
-          setup_type: !isUptrend ? "TREND_RALLY_SELL_SL_SWEEP" : "COUNTER_EXHAUSTION_SELL_SL_SWEEP",
+      // Evaluate confluence for potential SHORT
+      if (!activePos && allowShort) {
+        const fvgMatch = findOverlappingFVG(currentBar, activeFVGs, "SHORT");
+        const volumeDeltaAligned = cvd > 0;
+
+        const confluenceInput: ConfluenceInput = {
+          fastEmaAboveSlowEma: !fastAboveSlow,
+          adxValue: currentADX,
+          adxThreshold: profile.adxThreshold,
+          consecutiveBars,
+          maxConsecutiveThreshold: profile.maxConsecutiveBars,
+          fastRsi,
+          rsiOverbought: profile.rsiOverbought,
+          rsiOversold: profile.rsiOversold,
+          entryDirection: "SHORT",
+          fractalPoolMapped: !!lastHigh,
+          retailRRVisible: sellSweepLevel < Infinity,
+          wickRatio: upperWickRatio,
+          minWickRatio: effectiveWickRatio,
+          rvol: currentRvol,
+          minRvol: profile.minRvol,
+          hasFVGOverlap: !!fvgMatch,
+          hasOrderBlock: false,
+          volumeDeltaAligned,
+          rvolSpike: currentRvol >= profile.minRvol,
         };
 
-        const pool = activePools.find((p) => p.pool_type === "SELL_SL");
-        if (pool) pool.status = "SWEPT";
+        const evaluation = evaluateConfluence(confluenceInput, profile);
+        confluenceSnapshot = evaluation;
 
-        alertMessage = `🚨 LIQUIDITY SWEEP ENTRY! SHORT @ $${activePos.entry_px} (SL: $${activePos.sl_px}, TP: $${activePos.tp_px}) [${!isUptrend ? "Trend-Confluent" : "Exhaustion Climax"}]`;
+        if (evaluation.is_high_probability) {
+          const sl = currentBar.close + currentATR * profile.atrSlMultiplier;
+          const riskDist = sl - currentBar.close;
+          const tp = currentBar.close - riskDist * effectiveRR;
+
+          const finalTP = lastLow && lastLow.price < currentBar.close
+            ? Math.min(lastLow.price, tp)
+            : tp;
+
+          const actualRR = (currentBar.close - finalTP) / riskDist;
+          if (actualRR >= profile.riskRewardMin) {
+            activePos = {
+              trade_id: Date.now() + Math.floor(Math.random() * 1000),
+              symbol,
+              side: "SHORT",
+              entry_time: currentBar.time,
+              entry_index: currentIndex,
+              entry_px: fmtPrice(currentBar.close),
+              sl_px: fmtPrice(sl),
+              tp_px: fmtPrice(finalTP),
+              confluence_score: evaluation.score,
+              swept_pool_price: sellSweepLevel,
+              setup_type: !isUptrend
+                ? `TREND_RALLY_SELL [${profile.category}]`
+                : `COUNTER_EXHAUSTION_SELL [${profile.category}]`,
+            };
+
+            const pool = activePools.find((p) => p.pool_type === "SELL_SL");
+            if (pool) pool.status = "SWEPT";
+
+            alertMessage = `LIQUIDITY SWEEP ENTRY! SHORT @ $${activePos.entry_px} | Confluence: ${evaluation.score}/100 | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ADX: ${round2(currentADX)} | ${profile.category}${fvgMatch ? " + FVG" : ""}`;
+          }
+        }
+      }
+
+      // Log ADX rejection
+      if (!activePos && !adxGatePass && (isBuySweep || isSellSweep)) {
+        alertMessage = `[ADX FILTER] Sweep detected but ADX ${round2(currentADX)} < ${profile.adxThreshold} (${profile.category}). Ranging market, skipped.`;
       }
     }
   }
@@ -365,6 +430,9 @@ export function stepReplaySimulation(
     newPosition: activePos,
     activePools,
     sweepAlert: alertMessage,
+    confluenceSnapshot,
+    activeFVGs,
+    adxValue: round2(currentADX),
   };
 }
 
@@ -388,12 +456,19 @@ export function runFullAutomatedBacktest(
     profit_factor: number;
     net_return_pct: number;
     max_drawdown_pct: number;
+    avg_confluence: number;
+    asset_category: string;
   };
 } {
+  const profile = getAssetProfile(symbol);
   const trades: ReplayTrade[] = [];
   let currentPos: ActivePosition | null = null;
+  let totalConfluence = 0;
+  let confluenceCount = 0;
 
-  for (let i = 10; i < candles.length; i++) {
+  const startBar = Math.max(10, profile.adxPeriod * 3);
+
+  for (let i = startBar; i < candles.length; i++) {
     const result = stepReplaySimulation(
       candles,
       i,
@@ -406,11 +481,12 @@ export function runFullAutomatedBacktest(
     );
     if (result.closedTrade) {
       trades.push(result.closedTrade);
+      totalConfluence += result.closedTrade.confluence_score;
+      confluenceCount++;
     }
     currentPos = result.newPosition;
   }
 
-  // Calculate summary metrics
   const winning = trades.filter((t) => t.result === "WIN");
   const losing = trades.filter((t) => t.result === "LOSS");
   const winRate = trades.length > 0 ? (winning.length / trades.length) * 100 : 0;
@@ -420,7 +496,6 @@ export function runFullAutomatedBacktest(
   const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 9.99 : 1.0;
   const netReturn = grossProfit - grossLoss;
 
-  // Max drawdown calculation
   let peak = 0;
   let maxDd = 0;
   let runningPnl = 0;
@@ -442,6 +517,46 @@ export function runFullAutomatedBacktest(
       profit_factor: parseFloat(profitFactor.toFixed(2)),
       net_return_pct: parseFloat(netReturn.toFixed(2)),
       max_drawdown_pct: parseFloat(maxDd.toFixed(1)),
+      avg_confluence: confluenceCount > 0 ? parseFloat((totalConfluence / confluenceCount).toFixed(1)) : 0,
+      asset_category: profile.category,
     },
   };
+}
+
+function buildClosedTrade(
+  pos: ActivePosition,
+  symbol: string,
+  timeframe: string,
+  currentBar: Candle,
+  exitPx: number,
+  pnl: number,
+  result: "WIN" | "LOSS"
+): ReplayTrade {
+  return {
+    trade_id: pos.trade_id,
+    asset: symbol,
+    timeframe,
+    side: pos.side,
+    entry_time: pos.entry_time,
+    entry_px: pos.entry_px,
+    sl_px: pos.sl_px,
+    tp_px: pos.tp_px,
+    exit_time: currentBar.time,
+    exit_px: exitPx,
+    confluence_score: pos.confluence_score,
+    setup_type: pos.setup_type,
+    pnl_pct: parseFloat(pnl.toFixed(2)),
+    result,
+    notes: result === "WIN"
+      ? `Take Profit hit @ $${exitPx}`
+      : `Stopped out @ $${exitPx}`,
+  };
+}
+
+function fmtPrice(price: number): number {
+  return parseFloat(price.toFixed(price < 1 ? 6 : 2));
+}
+
+function round2(n: number): number {
+  return parseFloat(n.toFixed(2));
 }

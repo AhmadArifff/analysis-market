@@ -32,11 +32,12 @@ export async function GET(request: NextRequest) {
         score: 85,
         status: "HIGH_PROBABILITY_SETUP",
         breakdown: {
-          macro_trend_ema_adx: 20,
-          daily_exhaustion_atr_rsi5: 20,
-          retail_rr_pool_mapped: 20,
-          sweep_pinbar_rvol: 25,
-          divergence_or_oi_plunge: 0,
+          trendAlignment: 22,
+          exhaustionZone: 12,
+          liquidityPool: 18,
+          sweepRejection: 17,
+          structureShift: 8,
+          volumeConfirm: 8,
         },
       },
       active_liquidity_pools: [

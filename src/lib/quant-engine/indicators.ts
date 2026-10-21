@@ -117,6 +117,100 @@ export function calculateRSI(closes: number[], period: number = 5): number[] {
 }
 
 /**
+ * Calculates Average Directional Index (ADX) using Wilder's smoothing.
+ * ADX measures trend strength regardless of direction:
+ *   < 20: ranging/choppy, 20-40: trending, > 40: strong trend
+ */
+export function calculateADX(candles: Candle[], period: number = 14): number[] {
+  if (candles.length < period * 2 + 1) return [];
+
+  const plusDM: number[] = [];
+  const minusDM: number[] = [];
+  const tr: number[] = [];
+
+  for (let i = 1; i < candles.length; i++) {
+    const highDiff = candles[i].high - candles[i - 1].high;
+    const lowDiff = candles[i - 1].low - candles[i].low;
+
+    plusDM.push(highDiff > lowDiff && highDiff > 0 ? highDiff : 0);
+    minusDM.push(lowDiff > highDiff && lowDiff > 0 ? lowDiff : 0);
+
+    const trueRange = Math.max(
+      candles[i].high - candles[i].low,
+      Math.abs(candles[i].high - candles[i - 1].close),
+      Math.abs(candles[i].low - candles[i - 1].close)
+    );
+    tr.push(trueRange);
+  }
+
+  const wilderSmooth = (data: number[], p: number): number[] => {
+    const smoothed: number[] = [];
+    let sum = 0;
+    for (let i = 0; i < p; i++) sum += data[i];
+    smoothed.push(sum);
+    for (let i = p; i < data.length; i++) {
+      smoothed.push(smoothed[smoothed.length - 1] - smoothed[smoothed.length - 1] / p + data[i]);
+    }
+    return smoothed;
+  };
+
+  const smoothTR = wilderSmooth(tr, period);
+  const smoothPlusDM = wilderSmooth(plusDM, period);
+  const smoothMinusDM = wilderSmooth(minusDM, period);
+
+  const dx: number[] = [];
+  for (let i = 0; i < smoothTR.length; i++) {
+    if (smoothTR[i] === 0) {
+      dx.push(0);
+      continue;
+    }
+    const plusDI = (smoothPlusDM[i] / smoothTR[i]) * 100;
+    const minusDI = (smoothMinusDM[i] / smoothTR[i]) * 100;
+    const diSum = plusDI + minusDI;
+    dx.push(diSum === 0 ? 0 : (Math.abs(plusDI - minusDI) / diSum) * 100);
+  }
+
+  if (dx.length < period) return [];
+
+  const adx: number[] = [];
+  let adxSum = 0;
+  for (let i = 0; i < period; i++) adxSum += dx[i];
+  let prevADX = adxSum / period;
+  adx.push(prevADX);
+
+  for (let i = period; i < dx.length; i++) {
+    const currentADX = (prevADX * (period - 1) + dx[i]) / period;
+    adx.push(currentADX);
+    prevADX = currentADX;
+  }
+
+  return adx;
+}
+
+/**
+ * Approximates Volume Delta (buying vs selling pressure) from OHLC data.
+ * Positive delta = buying pressure dominant, Negative = selling dominant.
+ */
+export function calculateVolumeDelta(candles: Candle[]): number[] {
+  return candles.map((c) => {
+    const range = c.high - c.low;
+    if (range <= 0 || !c.volume) return 0;
+    const buyRatio = (c.close - c.low) / range;
+    const buyVolume = c.volume * buyRatio;
+    const sellVolume = c.volume * (1 - buyRatio);
+    return buyVolume - sellVolume;
+  });
+}
+
+/**
+ * Cumulative Volume Delta over a lookback window
+ */
+export function cumulativeVolumeDelta(candles: Candle[], lookback: number = 10): number {
+  const deltas = calculateVolumeDelta(candles.slice(-lookback));
+  return deltas.reduce((sum, d) => sum + d, 0);
+}
+
+/**
  * Detects Williams 5-Bar Fractals (Swing High and Swing Low)
  * Rule: High[i] > High[i-1], High[i-2], High[i+1], High[i+2]
  */
