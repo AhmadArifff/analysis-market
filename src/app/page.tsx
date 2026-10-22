@@ -37,6 +37,12 @@ import {
   StrategySchemaConfig,
 } from "@/lib/quant-engine/simulator";
 import type { ParallelChannel } from "@/lib/quant-engine/parallelChannel";
+import {
+  CHART_PATTERN_CATALOG,
+  ChartPatternId,
+  DetectedChartPattern,
+} from "@/lib/quant-engine/chartPatterns";
+import PatternVisualAsset from "@/components/PatternVisualAsset";
 import { useRealtimeTicker } from "@/lib/data-feed/useRealtimeTicker";
 import { terminalAudio } from "@/lib/alerts/audioChime";
 import SettingsDrawer, { DEFAULT_SETTINGS, StrategySettings } from "@/components/SettingsDrawer";
@@ -245,6 +251,7 @@ export default function TerminalHome() {
   // Institutional Strategy Settings & Stress Testing State
   const [settings, setSettings] = useState<StrategySettings>(DEFAULT_SETTINGS);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"risk" | "algo" | "patterns" | "alerts">("risk");
   const [isMonteCarloOpen, setIsMonteCarloOpen] = useState(false);
   const [sessionInfo, setSessionInfo] = useState({
     name: "NEW YORK OPEN",
@@ -270,6 +277,7 @@ export default function TerminalHome() {
   const [replayAlert, setReplayAlert] = useState<string | null>(null);
   const [directionFilter, setDirectionFilter] = useState<TradeDirectionFilter>("AUTO");
   const [activeChannel, setActiveChannel] = useState<ParallelChannel | null>(null);
+  const [detectedPattern, setDetectedPattern] = useState<DetectedChartPattern | null>(null);
 
   // Dummy Capital & Lot Size Simulation State
   const [dummyCapital, setDummyCapital] = useState<number>(DEFAULT_SETTINGS.initialCapital);
@@ -300,6 +308,8 @@ export default function TerminalHome() {
     enableTrendFilter: settings.enableTrendFilter ?? true,
     enableVolumeFilter: settings.enableVolumeFilter ?? true,
     enableTrendRunner: settings.enableTrendRunner ?? true,
+    enablePatternTrades: settings.enablePatternTrades ?? true,
+    enabledPatterns: settings.enabledPatterns,
     channelLookback: settings.channelLookback ?? 25,
     channelAnchorMode: settings.channelAnchorMode ?? "SWING_HIGHLOW",
   }), [
@@ -310,6 +320,8 @@ export default function TerminalHome() {
     settings.enableTrendFilter,
     settings.enableVolumeFilter,
     settings.enableTrendRunner,
+    settings.enablePatternTrades,
+    settings.enabledPatterns,
     settings.channelLookback,
     settings.channelAnchorMode,
   ]);
@@ -322,7 +334,7 @@ export default function TerminalHome() {
     fast_rsi_5: number;
   } | null>(null);
 
-  // Live re-evaluate current bar channel & pools whenever strategy schema settings change
+  // Live re-evaluate current bar channel, pools & chart patterns whenever strategy schema settings change
   useEffect(() => {
     if (fullCandles.length > 0 && !isPlaying) {
       const res = stepReplaySimulation(
@@ -338,8 +350,9 @@ export default function TerminalHome() {
         dummyLotSize,
         schemaConfig
       );
-      if (res.activePools) setPools(res.activePools);
-      setActiveChannel(res.activeChannel !== undefined ? res.activeChannel : null);
+      setPools(res.activePools || []);
+      setActiveChannel(res.activeChannel ?? null);
+      setDetectedPattern(res.detectedPattern ?? null);
     }
   }, [schemaConfig, settings.minWickRatio, settings.retailRRThreshold]);
 
@@ -382,6 +395,7 @@ export default function TerminalHome() {
     setSimulationTrades([]);
     setIsLiquidated(false);
     setActiveChannel(null);
+    setDetectedPattern(null);
     setCurrentBalance(dummyCapital);
     try {
       const url = `/api/market/candles?symbol=${sym}&timeframe=${tf}&startDate=${start}&endDate=${end}`;
@@ -407,12 +421,9 @@ export default function TerminalHome() {
             dummyLotSize,
             schemaConfig
           );
-          if (initRes.activePools && initRes.activePools.length > 0) {
-            setPools(initRes.activePools);
-          }
-          if (initRes.activeChannel !== undefined) {
-            setActiveChannel(initRes.activeChannel);
-          }
+          setPools(initRes.activePools || []);
+          setActiveChannel(initRes.activeChannel ?? null);
+          setDetectedPattern(initRes.detectedPattern ?? null);
 
           if (json.exhaustion) {
             setRealExhaustion(json.exhaustion);
@@ -473,12 +484,9 @@ export default function TerminalHome() {
       schemaConfig
     );
 
-    if (stepResult.activePools && stepResult.activePools.length > 0) {
-      setPools(stepResult.activePools);
-    }
-    if (stepResult.activeChannel !== undefined) {
-      setActiveChannel(stepResult.activeChannel);
-    }
+    setPools(stepResult.activePools || []);
+    setActiveChannel(stepResult.activeChannel ?? null);
+    setDetectedPattern(stepResult.detectedPattern ?? null);
 
     // Trade Opening Event (New position entered on this bar)
     if (!activePosition && stepResult.newPosition) {
@@ -581,8 +589,9 @@ export default function TerminalHome() {
         dummyLotSize,
         schemaConfig
       );
-      if (res.activePools) setPools(res.activePools);
-      if (res.activeChannel !== undefined) setActiveChannel(res.activeChannel);
+      setPools(res.activePools || []);
+      setActiveChannel(res.activeChannel ?? null);
+      setDetectedPattern(res.detectedPattern ?? null);
       setActivePosition(res.newPosition);
     }
   };
@@ -610,8 +619,9 @@ export default function TerminalHome() {
       dummyLotSize,
       schemaConfig
     );
-    if (res.activePools) setPools(res.activePools);
-    if (res.activeChannel !== undefined) setActiveChannel(res.activeChannel);
+    setPools(res.activePools || []);
+    setActiveChannel(res.activeChannel ?? null);
+    setDetectedPattern(res.detectedPattern ?? null);
     setReplayAlert(`🔄 Bar Replay di-reset ke histori masa lalu. Modal siap: $${initialBal.toLocaleString()} | Lot: ${dummyLotSize}`);
   };
 
@@ -1187,8 +1197,9 @@ export default function TerminalHome() {
                         dummyLotSize,
                         schemaConfig
                       );
-                      if (res.activePools) setPools(res.activePools);
-                      if (res.activeChannel !== undefined) setActiveChannel(res.activeChannel);
+                      setPools(res.activePools || []);
+                      setActiveChannel(res.activeChannel ?? null);
+                      setDetectedPattern(res.detectedPattern ?? null);
                       setReplayAlert(`⏪ Memutar mundur ke awal (${formatBarTime(fullCandles[startIdx]?.time)} - $${fullCandles[startIdx]?.close}). Modal: $${dummyCapital.toLocaleString()} | Lot: ${dummyLotSize}. Tekan PLAY untuk mulai simulasi!`);
                     }}
                     className="flex items-center gap-1 rounded border border-[#D97706]/60 bg-[#D97706]/15 px-2 py-1 font-mono text-xs text-[#F59E0B] hover:bg-[#D97706]/25 active:scale-95 transition"
@@ -1217,8 +1228,9 @@ export default function TerminalHome() {
                         dummyLotSize,
                         schemaConfig
                       );
-                      if (res.activePools) setPools(res.activePools);
-                      if (res.activeChannel !== undefined) setActiveChannel(res.activeChannel);
+                      setPools(res.activePools || []);
+                      setActiveChannel(res.activeChannel ?? null);
+                      setDetectedPattern(res.detectedPattern ?? null);
                       setReplayAlert(`⏩ Melompat ke candle terkini (LIVE / NOW: $${fullCandles[lastIdx]?.close}). Saldo: $${currentBalance.toLocaleString()}`);
                     }}
                     className="flex items-center gap-1 rounded border border-[#10B981]/60 bg-[#10B981]/15 px-2 py-1 font-mono text-xs text-[#10B981] hover:bg-[#10B981]/25 active:scale-95 transition"
@@ -1371,8 +1383,9 @@ export default function TerminalHome() {
                       dummyLotSize,
                       schemaConfig
                     );
-                    if (res.activePools) setPools(res.activePools);
-                    if (res.activeChannel !== undefined) setActiveChannel(res.activeChannel);
+                    setPools(res.activePools || []);
+                    setActiveChannel(res.activeChannel ?? null);
+                    setDetectedPattern(res.detectedPattern ?? null);
                     setActivePosition(res.newPosition);
                   }}
                   className="w-full accent-[#38BDF8] cursor-pointer h-1.5 bg-[#1F2430] rounded-lg"
@@ -1599,6 +1612,53 @@ export default function TerminalHome() {
                     </span>
                     <span>7. Trend Runner</span>
                   </button>
+
+                  {/* 8. 20 Pola Chart Toggle & Direct Drawer Opener */}
+                  <div className="flex items-center">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          enablePatternTrades: !prev.enablePatternTrades,
+                        }))
+                      }
+                      className={`flex items-center gap-1.5 rounded-l px-2 py-1 text-[11px] font-bold border transition ${
+                        settings.enablePatternTrades
+                          ? "bg-[#6366F1]/15 border-[#6366F1]/50 text-[#818CF8]"
+                          : "bg-[#141824] border-[#1F2430] text-[#64748B] hover:text-[#94A3B8]"
+                      }`}
+                      title="Aktifkan/Nonaktifkan Deteksi & Eksekusi 20 Pola Chart Klasik (Continuation, Reversal & Triangles)"
+                    >
+                      <span
+                        className={`flex h-3 w-3 items-center justify-center rounded-sm border ${
+                          settings.enablePatternTrades
+                            ? "border-[#818CF8] bg-[#818CF8]"
+                            : "border-[#475569] bg-transparent"
+                        }`}
+                      >
+                        {settings.enablePatternTrades && (
+                          <Check className="h-2.5 w-2.5 text-[#090A0F] stroke-[3]" />
+                        )}
+                      </span>
+                      <span>8. 20 Pola Chart</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSettingsTab("patterns");
+                        setIsSettingsOpen(true);
+                      }}
+                      className={`rounded-r border-y border-r px-1.5 py-1 text-[10px] font-bold transition hover:bg-[#6366F1]/20 ${
+                        settings.enablePatternTrades
+                          ? "border-[#6366F1]/50 bg-[#6366F1]/25 text-[#A5B4FC]"
+                          : "border-[#1F2430] bg-[#141824] text-[#64748B]"
+                      }`}
+                      title="Buka Pengaturan 20 Pola Chart untuk menyesuaikan masing-masing pola secara individual"
+                    >
+                      {Object.values(settings.enabledPatterns || {}).filter(Boolean).length}/20 📐
+                    </button>
+                  </div>
                 </div>
 
                 {/* Quick Channel Anchor Mode Selector & Full Settings Link */}
@@ -1746,11 +1806,11 @@ export default function TerminalHome() {
               symbol={activeAsset.symbol}
               timeframe={timeframe}
               candles={visibleCandles}
-              pools={pools}
+              pools={settings.enableLiquiditySweep ? pools : []}
               activePosition={activePosition}
               liveTickPrice={liveTick?.price}
               height={520}
-              channel={activeChannel}
+              channel={settings.enableParallelChannel ? activeChannel : null}
             />
           )}
 
@@ -2334,7 +2394,171 @@ export default function TerminalHome() {
             )}
           </div>
 
-          {/* E. Dynamic Backtest Metrics Card (Updates with Replay Simulation) */}
+          {/* E. Karakteristik Pola Chart Aktif (20 Classical Chart Patterns) */}
+          <div className="rounded border border-[#1F2430] bg-[#0E1118] p-5">
+            <div className="flex items-center justify-between border-b border-[#1F2430] pb-2.5">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-[#F59E0B]" />
+                <h3 className="font-mono text-xs font-bold tracking-wider text-[#F8FAFC]">
+                  KARAKTERISTIK POLA CHART (20 PATTERNS)
+                </h3>
+              </div>
+              <div className="flex items-center gap-2">
+                {!settings.enablePatternTrades && (
+                  <span className="rounded bg-[#F43F5E]/15 border border-[#F43F5E]/40 px-2 py-0.5 font-mono text-[9px] font-bold text-[#F43F5E]">
+                    NON-AKTIF
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettingsTab("patterns");
+                    setIsSettingsOpen(true);
+                  }}
+                  className="rounded border border-[#6366F1]/50 bg-[#6366F1]/15 px-2 py-0.5 font-mono text-[10px] font-bold text-[#818CF8] hover:bg-[#6366F1]/25 transition"
+                  title="Sesuaikan 20 pola secara individual"
+                >
+                  ⚙ {Object.values(settings.enabledPatterns || {}).filter(Boolean).length}/20 AKTIF
+                </button>
+              </div>
+            </div>
+
+            {/* Inactive Notice Banner */}
+            {!settings.enablePatternTrades && (
+              <div className="mt-3 rounded border border-[#F43F5E]/30 bg-[#2A0E17] p-2.5 font-mono text-[11px] text-[#FDA4AF] flex items-center justify-between gap-2">
+                <span>Skema 20 Pola Chart saat ini dinonaktifkan di checklist simulasi.</span>
+                <button
+                  type="button"
+                  onClick={() => setSettings((prev) => ({ ...prev, enablePatternTrades: true }))}
+                  className="rounded bg-[#818CF8] px-2 py-1 text-[10px] font-bold text-[#090A0F] hover:bg-[#818CF8]/90 transition shrink-0"
+                >
+                  AKTIFKAN SEKARANG
+                </button>
+              </div>
+            )}
+
+            {detectedPattern ? (
+              <div className="mt-4 space-y-3 font-mono text-xs">
+                {/* Visual Asset Preview & Pattern Name Header */}
+                <div className="flex items-center gap-3.5 rounded border border-[#1F2430] bg-[#121622] p-3">
+                  <div className="relative shrink-0 rounded border border-[#1F2430] bg-[#0A0D14] p-1.5 shadow-inner">
+                    <PatternVisualAsset
+                      patternId={detectedPattern.id}
+                      size={84}
+                      showLabel={false}
+                      animated={true}
+                    />
+                    <div className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-[#38BDF8] text-[9px] font-extrabold text-[#090A0F]">
+                      ✓
+                    </div>
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[9px] font-extrabold uppercase ${
+                          detectedPattern.bias === "BULLISH"
+                            ? "bg-[#10B981]/20 text-[#10B981] border border-[#10B981]/40"
+                            : detectedPattern.bias === "BEARISH"
+                            ? "bg-[#F43F5E]/20 text-[#F43F5E] border border-[#F43F5E]/40"
+                            : "bg-[#38BDF8]/20 text-[#38BDF8] border border-[#38BDF8]/40"
+                        }`}
+                      >
+                        {detectedPattern.bias}
+                      </span>
+                      <span className="rounded bg-[#1E293B] border border-[#334155] px-1.5 py-0.5 text-[9px] font-bold text-[#94A3B8]">
+                        {detectedPattern.category}
+                      </span>
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[9px] font-extrabold ${
+                          detectedPattern.status === "CONFIRMED_BREAKOUT"
+                            ? "bg-[#10B981]/20 text-[#10B981] animate-pulse border border-[#10B981]/60"
+                            : "bg-[#F59E0B]/20 text-[#F59E0B] border border-[#F59E0B]/40"
+                        }`}
+                      >
+                        ● {detectedPattern.status === "CONFIRMED_BREAKOUT" ? "CONFIRMED BREAKOUT" : "SEDANG TERBENTUK"}
+                      </span>
+                    </div>
+
+                    <h4 className="text-sm font-bold text-[#F8FAFC] truncate">
+                      {detectedPattern.name}
+                    </h4>
+                    <p className="text-[11px] text-[#94A3B8] line-clamp-2 mt-0.5">
+                      {detectedPattern.notes}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Key Metrics: Neckline & Target Level */}
+                <div className="grid grid-cols-2 gap-2 text-center">
+                  <div className="rounded border border-[#1F2430] bg-[#121622] p-2">
+                    <span className="text-[10px] text-[#64748B] block">NECKLINE / BOUNDARY</span>
+                    <strong className="text-[#38BDF8] font-bold text-xs">
+                      ${detectedPattern.neckline < 1 ? detectedPattern.neckline.toFixed(6) : detectedPattern.neckline.toFixed(2)}
+                    </strong>
+                  </div>
+                  <div className="rounded border border-[#1F2430] bg-[#121622] p-2">
+                    <span className="text-[10px] text-[#64748B] block">PROJECTED TARGET (TP)</span>
+                    <strong className="text-[#10B981] font-bold text-xs">
+                      ${detectedPattern.target_price < 1 ? detectedPattern.target_price.toFixed(6) : detectedPattern.target_price.toFixed(2)}
+                    </strong>
+                  </div>
+                </div>
+
+                {/* Quantitative Quality Details */}
+                <div className="rounded border border-[#1F2430] bg-[#121622] p-2.5 space-y-1.5 text-[11px]">
+                  <div className="flex items-center justify-between text-[#94A3B8]">
+                    <span>Kualitas Deteksi:</span>
+                    <span className="font-bold text-[#10B981]">
+                      {(detectedPattern.confidence * 100).toFixed(0)}% Confluence
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[#94A3B8]">
+                    <span>Aturan Entry:</span>
+                    <span className="text-[#E2E8F0] font-medium text-right max-w-[200px] truncate">
+                      {CHART_PATTERN_CATALOG[detectedPattern.id]?.tradingRule || "Breakout konfirmasi bar close"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-[#1F2430]/70 pt-1.5 text-[#94A3B8]">
+                    <span>ID Pola:</span>
+                    <code className="text-[#64748B] text-[10px]">{detectedPattern.id}</code>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 rounded border border-[#1F2430] bg-[#121622] p-4 text-center font-mono">
+                <div className="flex justify-center mb-2">
+                  <div className="flex -space-x-2">
+                    <div className="h-10 w-10 rounded border border-[#1F2430] bg-[#0A0D14] flex items-center justify-center p-1 opacity-60">
+                      <PatternVisualAsset patternId="BULLISH_FLAG" size={32} showLabel={false} />
+                    </div>
+                    <div className="h-10 w-10 rounded border border-[#1F2430] bg-[#0A0D14] flex items-center justify-center p-1 opacity-80 z-10 scale-105 shadow-md">
+                      <PatternVisualAsset patternId="BEARISH_DOUBLE_TOP" size={32} showLabel={false} />
+                    </div>
+                    <div className="h-10 w-10 rounded border border-[#1F2430] bg-[#0A0D14] flex items-center justify-center p-1 opacity-60">
+                      <PatternVisualAsset patternId="ASCENDING_TRIANGLE" size={32} showLabel={false} />
+                    </div>
+                  </div>
+                </div>
+                <div className="text-xs font-bold text-[#E2E8F0]">Memindai 20 Pola Klasik...</div>
+                <p className="text-[11px] text-[#64748B] mt-1">
+                  Belum ada pola fractal (Double Top/Bottom, H&S, Flag, Wedge, Triangle) yang terkonfirmasi pada bar ini.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettingsTab("patterns");
+                    setIsSettingsOpen(true);
+                  }}
+                  className="mt-3 inline-flex items-center gap-1.5 rounded border border-[#6366F1]/50 bg-[#6366F1]/15 px-3 py-1 text-[11px] font-bold text-[#A5B4FC] hover:bg-[#6366F1]/25 transition"
+                >
+                  <span>📐 LIHAT ASSET &amp; ATUR 20 POLA</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* F. Dynamic Backtest Metrics Card (Updates with Replay Simulation) */}
           <div className="rounded border border-[#1F2430] bg-[#0E1118] p-5">
             <div className="flex items-center justify-between">
               <span className="font-mono text-xs font-semibold text-[#8E9BAE]">
@@ -2399,8 +2623,32 @@ export default function TerminalHome() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
+        initialTab={settingsTab}
         onSave={(newSettings: StrategySettings) => {
           setSettings(newSettings);
+          if (!newSettings.enableParallelChannel) {
+            setActiveChannel(null);
+          }
+          if (!newSettings.enableLiquiditySweep) {
+            setPools([]);
+          }
+          if (!newSettings.enablePatternTrades) {
+            setDetectedPattern(null);
+          }
+          if (activePosition) {
+            const isChannelPos = activePosition.setup_type.includes("CHANNEL");
+            const isPatternPos = activePosition.setup_type.includes("PATTERN");
+            const isSweepPos = activePosition.setup_type.includes("SWEEP") || activePosition.setup_type.includes("RETAIL");
+            const isRunnerPos = activePosition.setup_type.includes("RUNNER");
+            if (
+              (isChannelPos && !newSettings.enableParallelChannel) ||
+              (isPatternPos && !newSettings.enablePatternTrades) ||
+              (isSweepPos && !newSettings.enableLiquiditySweep) ||
+              (isRunnerPos && !newSettings.enableTrendRunner)
+            ) {
+              setActivePosition(null);
+            }
+          }
           setReplayAlert("⚙ Parameter Algoritma, Manajemen Risiko & Webhook berhasil diperbarui!");
         }}
       />

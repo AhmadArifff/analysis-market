@@ -13,8 +13,18 @@ import {
   CheckCircle2,
   AlertCircle,
   HelpCircle,
+  Layers,
+  Check,
 } from "lucide-react";
 import { terminalAudio } from "@/lib/alerts/audioChime";
+import {
+  ChartPatternId,
+  ChartPatternCategory,
+  CHART_PATTERN_CATALOG,
+  ALL_PATTERN_IDS,
+  getDefaultEnabledPatterns,
+} from "@/lib/quant-engine/chartPatterns";
+import PatternVisualAsset from "@/components/PatternVisualAsset";
 
 export interface StrategySettings {
   initialCapital: number;
@@ -34,6 +44,10 @@ export interface StrategySettings {
   enableTrendFilter: boolean; // 5. Macro Trend Alignment (EMA 21/50 + ADX 14)
   enableVolumeFilter: boolean; // 6. Relative Volume Spikes (RVOL >= 1.5x + CVD)
   enableTrendRunner: boolean; // 7. Trend Runner / Liquidity Void Continuation (No-Sweep Flow)
+
+  // 20 Pola Karakteristik Chart Klasik Toggles
+  enablePatternTrades: boolean; // Master toggle eksekusi breakout pola chart
+  enabledPatterns: Record<ChartPatternId, boolean>; // Checklist per individual pola
 
   // Channel Anchoring Configuration
   channelLookback: number; // Lookback bars for parallel channel detection (default: 25)
@@ -63,6 +77,9 @@ export const DEFAULT_SETTINGS: StrategySettings = {
   enableVolumeFilter: true,
   enableTrendRunner: true,
 
+  enablePatternTrades: true,
+  enabledPatterns: getDefaultEnabledPatterns(),
+
   channelLookback: 25,
   channelAnchorMode: "SWING_HIGHLOW",
 
@@ -77,6 +94,7 @@ interface SettingsDrawerProps {
   onClose: () => void;
   settings: StrategySettings;
   onSave: (newSettings: StrategySettings) => void;
+  initialTab?: "risk" | "algo" | "patterns" | "alerts";
 }
 
 export default function SettingsDrawer({
@@ -84,11 +102,21 @@ export default function SettingsDrawer({
   onClose,
   settings,
   onSave,
+  initialTab = "risk",
 }: SettingsDrawerProps) {
   const [form, setForm] = useState<StrategySettings>(settings);
-  const [activeTab, setActiveTab] = useState<"risk" | "algo" | "alerts">("risk");
+  const [activeTab, setActiveTab] = useState<"risk" | "algo" | "patterns" | "alerts">(initialTab);
+  const [patternFilter, setPatternFilter] = useState<"ALL" | ChartPatternCategory>("ALL");
   const [testStatus, setTestStatus] = useState<string | null>(null);
   const [isTestingWebhook, setIsTestingWebhook] = useState(false);
+
+  // Sync form and activeTab when drawer opens
+  React.useEffect(() => {
+    if (isOpen) {
+      setForm(settings);
+      if (initialTab) setActiveTab(initialTab);
+    }
+  }, [isOpen, initialTab, settings]);
 
   if (!isOpen) return null;
 
@@ -172,10 +200,10 @@ export default function SettingsDrawer({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-[#1F2430] mt-4 font-mono text-xs">
+        <div className="flex border-b border-[#1F2430] mt-4 font-mono text-xs overflow-x-auto">
           <button
             onClick={() => setActiveTab("risk")}
-            className={`flex-1 py-2 font-bold text-center border-b-2 transition ${
+            className={`flex-1 py-2 px-2 whitespace-nowrap font-bold text-center border-b-2 transition ${
               activeTab === "risk"
                 ? "border-[#38BDF8] text-[#38BDF8]"
                 : "border-transparent text-[#64748B] hover:text-[#94A3B8]"
@@ -185,7 +213,7 @@ export default function SettingsDrawer({
           </button>
           <button
             onClick={() => setActiveTab("algo")}
-            className={`flex-1 py-2 font-bold text-center border-b-2 transition ${
+            className={`flex-1 py-2 px-2 whitespace-nowrap font-bold text-center border-b-2 transition ${
               activeTab === "algo"
                 ? "border-[#10B981] text-[#10B981]"
                 : "border-transparent text-[#64748B] hover:text-[#94A3B8]"
@@ -194,8 +222,18 @@ export default function SettingsDrawer({
             SMC ALGORITHM
           </button>
           <button
+            onClick={() => setActiveTab("patterns")}
+            className={`flex-1 py-2 px-2 whitespace-nowrap font-bold text-center border-b-2 transition ${
+              activeTab === "patterns"
+                ? "border-[#F59E0B] text-[#F59E0B]"
+                : "border-transparent text-[#64748B] hover:text-[#94A3B8]"
+            }`}
+          >
+            📐 20 POLA CHART
+          </button>
+          <button
             onClick={() => setActiveTab("alerts")}
-            className={`flex-1 py-2 font-bold text-center border-b-2 transition ${
+            className={`flex-1 py-2 px-2 whitespace-nowrap font-bold text-center border-b-2 transition ${
               activeTab === "alerts"
                 ? "border-[#8B5CF6] text-[#A78BFA]"
                 : "border-transparent text-[#64748B] hover:text-[#94A3B8]"
@@ -524,6 +562,155 @@ export default function SettingsDrawer({
                     Skor syarat eksekusi sinyal sweep (C-QUANT-07: Minimal 80 Poin).
                   </span>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "patterns" && (
+            <div className="space-y-4">
+              {/* Master Pattern Detection Switch */}
+              <div className="flex items-center justify-between rounded border border-[#1F2430] bg-[#121622] p-3.5">
+                <div>
+                  <div className="font-bold text-[#F8FAFC] text-xs flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-[#F59E0B]"></span>
+                    MASTER SWITCH: DETEKSI &amp; ENTRI 20 POLA CHART
+                  </div>
+                  <div className="text-[10px] text-[#8E9BAE] mt-0.5">
+                    Aktifkan pengenalan pola geometris dan eksekusi otomatis saat breakout/neckline retest
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={form.enablePatternTrades}
+                  onChange={(e) => handleChange("enablePatternTrades", e.target.checked)}
+                  className="h-4 w-4 accent-[#F59E0B] cursor-pointer"
+                />
+              </div>
+
+              {/* Category Filter & Bulk Selection Actions */}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1F2430] pb-2 text-[11px]">
+                <div className="flex flex-wrap items-center gap-1 bg-[#121622] p-1 rounded border border-[#1F2430]">
+                  {(["ALL", "CONTINUATION", "REVERSAL", "BILATERAL"] as const).map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setPatternFilter(cat)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold transition ${
+                        patternFilter === cat
+                          ? "bg-[#F59E0B] text-[#090A0F]"
+                          : "text-[#64748B] hover:text-[#E2E8F0]"
+                      }`}
+                    >
+                      {cat === "ALL" ? "SEMUA (20)" : cat}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allActive = getDefaultEnabledPatterns();
+                      handleChange("enabledPatterns", allActive);
+                    }}
+                    className="rounded border border-[#10B981]/50 bg-[#10B981]/15 px-2 py-0.5 text-[10px] font-bold text-[#10B981] hover:bg-[#10B981]/25"
+                  >
+                    ✓ PILIH SEMUA
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const noneActive: Record<string, boolean> = {};
+                      for (const id of ALL_PATTERN_IDS) noneActive[id] = false;
+                      handleChange("enabledPatterns", noneActive);
+                    }}
+                    className="rounded border border-[#F43F5E]/50 bg-[#F43F5E]/15 px-2 py-0.5 text-[10px] font-bold text-[#F43F5E] hover:bg-[#F43F5E]/25"
+                  >
+                    ✕ HAPUS SEMUA
+                  </button>
+                </div>
+              </div>
+
+              {/* Individual Pattern Cards Grid with SVG Visual Assets */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {ALL_PATTERN_IDS.filter((id) => {
+                  const pat = CHART_PATTERN_CATALOG[id];
+                  if (patternFilter === "ALL") return true;
+                  return pat.category === patternFilter;
+                }).map((id) => {
+                  const pat = CHART_PATTERN_CATALOG[id];
+                  const isChecked = form.enabledPatterns?.[id] !== false;
+
+                  return (
+                    <div
+                      key={id}
+                      onClick={() => {
+                        const updated = {
+                          ...form.enabledPatterns,
+                          [id]: !isChecked,
+                        };
+                        handleChange("enabledPatterns", updated);
+                      }}
+                      className={`rounded border p-3 transition cursor-pointer select-none ${
+                        isChecked
+                          ? "border-[#F59E0B]/50 bg-[#0E1524] shadow-sm shadow-[#F59E0B]/5"
+                          : "border-[#1F2430] bg-[#121622]/60 opacity-60 hover:opacity-100"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="font-bold text-[#F8FAFC] text-xs flex items-center gap-1.5">
+                            <span
+                              className={`h-2 w-2 rounded-full ${
+                                pat.bias === "BULLISH"
+                                  ? "bg-[#10B981]"
+                                  : pat.bias === "BEARISH"
+                                  ? "bg-[#F43F5E]"
+                                  : "bg-[#38BDF8]"
+                              }`}
+                            />
+                            {pat.name}
+                          </div>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <span className="rounded bg-[#1F2430] px-1.5 py-0.5 text-[9px] text-[#94A3B8]">
+                              {pat.category}
+                            </span>
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${
+                                pat.bias === "BULLISH"
+                                  ? "bg-[#10B981]/15 text-[#10B981]"
+                                  : pat.bias === "BEARISH"
+                                  ? "bg-[#F43F5E]/15 text-[#F43F5E]"
+                                  : "bg-[#38BDF8]/15 text-[#38BDF8]"
+                              }`}
+                            >
+                              {pat.bias}
+                            </span>
+                          </div>
+                        </div>
+
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => {}} // handled by container onClick
+                          className="h-4 w-4 accent-[#F59E0B] mt-0.5 cursor-pointer"
+                        />
+                      </div>
+
+                      {/* SVG Visual Diagram Asset */}
+                      <div className="my-2.5 flex justify-center">
+                        <PatternVisualAsset patternId={id} width="100%" height={80} />
+                      </div>
+
+                      <div className="text-[10px] text-[#8E9BAE] line-clamp-2">
+                        {pat.description}
+                      </div>
+                      <div className="text-[10px] text-[#38BDF8] mt-1 font-semibold border-t border-[#1F2430]/60 pt-1">
+                        Target: {pat.tradingRule}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

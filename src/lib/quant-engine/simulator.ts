@@ -25,6 +25,12 @@ import {
   evaluateChannelSetups,
 } from "./parallelChannel";
 import { evaluateTrendRunnerSetup, TrendRunnerSignal } from "./trendRunner";
+import {
+  detectChartPatterns,
+  DetectedChartPattern,
+  ChartPatternId,
+  getDefaultEnabledPatterns,
+} from "./chartPatterns";
 
 export type TradeDirectionFilter = "AUTO" | "LONG" | "SHORT" | "ALL";
 
@@ -79,6 +85,7 @@ export interface SimulationStepResult {
   activeFVGs?: FairValueGap[];
   activeChannel?: ParallelChannel | null;
   channelSignal?: ChannelSignalType;
+  detectedPattern?: DetectedChartPattern | null;
   adxValue?: number;
   currentBalance?: number;
   isLiquidated?: boolean;
@@ -132,6 +139,8 @@ export interface StrategySchemaConfig {
   enableTrendFilter?: boolean;
   enableVolumeFilter?: boolean;
   enableTrendRunner?: boolean;
+  enablePatternTrades?: boolean;
+  enabledPatterns?: Record<ChartPatternId, boolean>;
   channelLookback?: number;
   channelAnchorMode?: "SWING_HIGHLOW" | "REGRESSION";
 }
@@ -165,6 +174,8 @@ export function stepReplaySimulation(
           enableTrendFilter: true,
           enableVolumeFilter: true,
           enableTrendRunner: true,
+          enablePatternTrades: true,
+          enabledPatterns: getDefaultEnabledPatterns(),
           channelAnchorMode: "SWING_HIGHLOW",
         };
 
@@ -175,6 +186,7 @@ export function stepReplaySimulation(
   const enableTrendFilter = schema.enableTrendFilter ?? true;
   const enableVolumeFilter = schema.enableVolumeFilter ?? true;
   const enableTrendRunner = schema.enableTrendRunner ?? true;
+  const enablePatternTrades = schema.enablePatternTrades ?? true;
   const effectiveChannelLookback = schema.channelLookback ?? 25;
   const channelAnchorMode = schema.channelAnchorMode ?? "SWING_HIGHLOW";
 
@@ -290,30 +302,32 @@ export function stepReplaySimulation(
     swept_ago?: string | null;
   }[] = [];
 
-  const effectiveLow = Math.max(recentMinLow, lastLow ? lastLow.price : 0);
-  if (effectiveLow > 0) {
-    const isSwept = currentBar.low <= effectiveLow;
-    activePools.push({
-      pool_id: 101,
-      pool_type: "BUY_SL",
-      pool_price: fmtPrice(effectiveLow),
-      retail_rr: 1.85,
-      status: isSwept ? "SWEPT" : "PENDING",
-      swept_ago: isSwept ? `Swept at bar ${currentIndex}` : null,
-    });
-  }
+  if (enableLiquiditySweep) {
+    const effectiveLow = Math.max(recentMinLow, lastLow ? lastLow.price : 0);
+    if (effectiveLow > 0) {
+      const isSwept = currentBar.low <= effectiveLow;
+      activePools.push({
+        pool_id: 101,
+        pool_type: "BUY_SL",
+        pool_price: fmtPrice(effectiveLow),
+        retail_rr: 1.85,
+        status: isSwept ? "SWEPT" : "PENDING",
+        swept_ago: isSwept ? `Swept at bar ${currentIndex}` : null,
+      });
+    }
 
-  const effectiveHigh = Math.min(recentMaxHigh, lastHigh ? lastHigh.price : Infinity);
-  if (effectiveHigh < Infinity) {
-    const isSwept = currentBar.high >= effectiveHigh;
-    activePools.push({
-      pool_id: 201,
-      pool_type: "SELL_SL",
-      pool_price: fmtPrice(effectiveHigh),
-      retail_rr: 2.1,
-      status: isSwept ? "SWEPT" : "PENDING",
-      swept_ago: isSwept ? `Swept at bar ${currentIndex}` : null,
-    });
+    const effectiveHigh = Math.min(recentMaxHigh, lastHigh ? lastHigh.price : Infinity);
+    if (effectiveHigh < Infinity) {
+      const isSwept = currentBar.high >= effectiveHigh;
+      activePools.push({
+        pool_id: 201,
+        pool_type: "SELL_SL",
+        pool_price: fmtPrice(effectiveHigh),
+        retail_rr: 2.1,
+        status: isSwept ? "SWEPT" : "PENDING",
+        swept_ago: isSwept ? `Swept at bar ${currentIndex}` : null,
+      });
+    }
   }
 
   // 3. Compute technical indicators on past bars
@@ -566,7 +580,7 @@ export function stepReplaySimulation(
   let activeChannel: ParallelChannel | null = null;
   let channelSignal: ChannelSignalType = "NONE";
 
-  if (pastCandles.length >= 10) {
+  if (enableParallelChannel && pastCandles.length >= 10) {
     const channelEval = evaluateChannelSetups(
       allCandles,
       currentIndex,
@@ -681,15 +695,54 @@ export function stepReplaySimulation(
     }
   }
 
+  // 7. Detect Chart Patterns (20 Classical Formations) & Breakout Execution
+  const detectedPattern = enablePatternTrades
+    ? detectChartPatterns(
+        allCandles,
+        currentIndex,
+        currentATR,
+        schema.enabledPatterns
+      )
+    : null;
+
+  if (enablePatternTrades && !activePos && detectedPattern && detectedPattern.status === "CONFIRMED_BREAKOUT") {
+    let allowPattern = false;
+    if (detectedPattern.bias === "BULLISH") {
+      allowPattern = directionFilter === "LONG" || directionFilter === "ALL" || directionFilter === "AUTO";
+    } else if (detectedPattern.bias === "BEARISH") {
+      allowPattern = directionFilter === "SHORT" || directionFilter === "ALL" || directionFilter === "AUTO";
+    }
+
+    if (allowPattern) {
+      activePos = {
+        trade_id: Date.now() + Math.floor(Math.random() * 1000),
+        symbol,
+        side: detectedPattern.bias === "BULLISH" ? "LONG" : "SHORT",
+        entry_time: currentBar.time,
+        entry_index: currentIndex,
+        entry_px: fmtPrice(currentBar.close),
+        sl_px: fmtPrice(detectedPattern.stop_loss),
+        tp_px: fmtPrice(detectedPattern.target_price),
+        confluence_score: detectedPattern.confidence,
+        swept_pool_price: detectedPattern.neckline,
+        setup_type: `PATTERN_${detectedPattern.id}`,
+        lot_size: lotSize,
+      };
+
+      alertMessage = `📐 POLA CHART BREAKOUT! ${detectedPattern.name} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ${detectedPattern.notes}`;
+    }
+  }
+
   return {
     closedTrade,
     newPosition: activePos,
-    activePools,
+    activePools: enableLiquiditySweep ? activePools : [],
     sweepAlert: alertMessage,
     confluenceSnapshot,
-    activeFVGs,
-    activeChannel,
-    channelSignal,
+    activeFVGs: enableFVGConfluence ? activeFVGs : [],
+    activeChannel: enableParallelChannel ? activeChannel : null,
+    channelSignal: enableParallelChannel ? channelSignal : "NONE",
+    detectedPattern: enablePatternTrades ? detectedPattern : null,
     adxValue: round2(currentADX),
     currentBalance: runningBalance,
     isLiquidated: runningBalance <= 0,
