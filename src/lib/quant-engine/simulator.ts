@@ -232,7 +232,7 @@ export function stepReplaySimulation(
 
   const profile = getAssetProfile(symbol);
   const effectiveWickRatio = Math.max(minWickRatio, profile.minWickRatio);
-  const effectiveRR = Math.max(riskRewardRatio, profile.riskRewardMin);
+  const effectiveRR = riskRewardRatio > 0 ? riskRewardRatio : profile.riskRewardMin;
 
   const currentBar = allCandles[currentIndex];
   let closedTrade: ReplayTrade | null = null;

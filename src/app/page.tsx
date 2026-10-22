@@ -279,13 +279,14 @@ export default function TerminalHome() {
   const [activeChannel, setActiveChannel] = useState<ParallelChannel | null>(null);
   const [detectedPattern, setDetectedPattern] = useState<DetectedChartPattern | null>(null);
 
-  // Dummy Capital & Lot Size Simulation State
+  // Dummy Capital, RR & Lot Size Simulation State
   const [dummyCapital, setDummyCapital] = useState<number>(DEFAULT_SETTINGS.initialCapital);
   const [dummyLotSize, setDummyLotSize] = useState<number>(DEFAULT_SETTINGS.lotSize || 0.10);
+  const [dummyRR, setDummyRR] = useState<number>(DEFAULT_SETTINGS.retailRRThreshold || 2.0);
   const [currentBalance, setCurrentBalance] = useState<number>(DEFAULT_SETTINGS.initialCapital);
   const [isLiquidated, setIsLiquidated] = useState<boolean>(false);
 
-  // Sync state if SettingsDrawer updates initialCapital or lotSize
+  // Sync state if SettingsDrawer updates initialCapital, lotSize, or retailRRThreshold
   useEffect(() => {
     if (settings.initialCapital && settings.initialCapital !== dummyCapital) {
       setDummyCapital(settings.initialCapital);
@@ -297,7 +298,10 @@ export default function TerminalHome() {
     if (settings.lotSize && settings.lotSize !== dummyLotSize) {
       setDummyLotSize(settings.lotSize);
     }
-  }, [settings.initialCapital, settings.lotSize]);
+    if (settings.retailRRThreshold && settings.retailRRThreshold !== dummyRR) {
+      setDummyRR(settings.retailRRThreshold);
+    }
+  }, [settings.initialCapital, settings.lotSize, settings.retailRRThreshold]);
 
   // Dynamic Strategy Schema Configuration (Active checklist passed into simulation)
   const schemaConfig: StrategySchemaConfig = useMemo(() => ({
@@ -1097,7 +1101,7 @@ export default function TerminalHome() {
                   )}
                 </div>
 
-                {/* Modal Dummy & Lot Size Dynamic Configuration */}
+                {/* Modal Dummy, RR & Lot Size Dynamic Configuration */}
                 <div className="flex flex-wrap items-center gap-2 rounded border border-[#1F2430] bg-[#141824] px-2.5 py-1">
                   {/* Dummy Capital Input */}
                   <div className="flex items-center gap-1">
@@ -1123,6 +1127,30 @@ export default function TerminalHome() {
                     </div>
                   </div>
 
+                  {/* Settingan RR (Risk-to-Reward Ratio) disamping MODAL */}
+                  <div className="flex items-center gap-1 border-l border-[#1F2430] pl-2">
+                    <span className="font-mono text-[10px] font-bold text-[#8E9BAE]" title="Target Risk to Reward Ratio (Take Profit multiplier)">
+                      RR:
+                    </span>
+                    <div className="relative flex items-center">
+                      <span className="text-[10px] font-mono text-[#38BDF8] font-bold mr-0.5">1:</span>
+                      <input
+                        type="number"
+                        min={0.5}
+                        max={10.0}
+                        step={0.1}
+                        value={dummyRR}
+                        onChange={(e) => {
+                          const val = Math.max(0.5, parseFloat(e.target.value) || 1.0);
+                          setDummyRR(val);
+                          setSettings((prev) => ({ ...prev, retailRRThreshold: val }));
+                        }}
+                        className="w-14 rounded bg-[#0A0D14] px-1.5 py-0.5 font-mono text-xs font-bold text-[#38BDF8] border border-[#1F2430] focus:border-[#38BDF8] focus:outline-none"
+                        title="Settingan Target Risk to Reward (misal 1:1.5, 1:2.0, 1:3.0)"
+                      />
+                    </div>
+                  </div>
+
                   {/* Nominal Lot Size Input */}
                   <div className="flex items-center gap-1 border-l border-[#1F2430] pl-2">
                     <span className="font-mono text-[10px] font-bold text-[#8E9BAE]">LOT:</span>
@@ -1134,6 +1162,7 @@ export default function TerminalHome() {
                       onChange={(e) => {
                         const val = Math.max(0.001, parseFloat(e.target.value) || 0.01);
                         setDummyLotSize(val);
+                        setSettings((prev) => ({ ...prev, lotSize: val }));
                       }}
                       className="w-16 rounded bg-[#0A0D14] px-1.5 py-0.5 font-mono text-xs font-semibold text-[#F8FAFC] border border-[#1F2430] focus:border-[#38BDF8] focus:outline-none"
                       title="Isi nominal lot size berapa saja (misal 0.01, 0.10, 1.0, 5.0)"
