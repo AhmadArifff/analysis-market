@@ -7,9 +7,11 @@ import {
   LineStyle,
   CandlestickSeries,
   HistogramSeries,
+  LineSeries,
   IChartApi,
   ISeriesApi,
 } from "lightweight-charts";
+import type { ParallelChannel } from "@/lib/quant-engine/parallelChannel";
 
 export interface CandleData {
   time: string | number;
@@ -44,6 +46,7 @@ interface LightweightChartProps {
   activePosition?: ActiveTradeMarker | null;
   liveTickPrice?: number | null;
   height?: number;
+  channel?: ParallelChannel | null;
 }
 
 export default function LightweightChart({
@@ -54,6 +57,7 @@ export default function LightweightChart({
   activePosition = null,
   liveTickPrice = null,
   height = 520,
+  channel = null,
 }: LightweightChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -206,6 +210,71 @@ export default function LightweightChart({
       });
     }
 
+    // Draw Parallel Channel envelopes (Upper, Midline 50%, Lower)
+    if (channel && sortedCandles.length >= 2) {
+      const channelCandles = sortedCandles.filter((c) => {
+        const ct = typeof c.time === "number" ? c.time : new Date(c.time).getTime() / 1000;
+        const st = typeof channel.start_time === "number" ? channel.start_time : new Date(channel.start_time).getTime() / 1000;
+        const et = typeof channel.end_time === "number" ? channel.end_time : new Date(channel.end_time).getTime() / 1000;
+        return ct >= st && ct <= et;
+      });
+
+      const pts = channelCandles.length >= 2 ? channelCandles : sortedCandles.slice(-25);
+
+      if (pts.length >= 2) {
+        const upperLineData = pts.map((c, idx) => ({
+          time: c.time as any,
+          value: parseFloat((channel.upper_intercept + channel.slope * idx).toFixed(4)),
+        }));
+
+        const midLineData = pts.map((c, idx) => ({
+          time: c.time as any,
+          value: parseFloat((channel.mid_intercept + channel.slope * idx).toFixed(4)),
+        }));
+
+        const lowerLineData = pts.map((c, idx) => ({
+          time: c.time as any,
+          value: parseFloat((channel.lower_intercept + channel.slope * idx).toFixed(4)),
+        }));
+
+        // Upper channel line (Cyan Solid #38BDF8)
+        const upperSeries = chart.addSeries(LineSeries, {
+          color: "#38BDF8",
+          lineWidth: 2,
+          lineStyle: LineStyle.Solid,
+          title: `CHANNEL RESISTANCE ($${channel.upper_price.toFixed(2)})`,
+          crosshairMarkerVisible: false,
+          lastValueVisible: true,
+          priceLineVisible: false,
+        });
+        upperSeries.setData(upperLineData);
+
+        // Midline 50% (Slate Dashed #94A3B8)
+        const midSeries = chart.addSeries(LineSeries, {
+          color: "#94A3B8",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          title: `MIDLINE 50% ($${channel.mid_price.toFixed(2)})`,
+          crosshairMarkerVisible: false,
+          lastValueVisible: true,
+          priceLineVisible: false,
+        });
+        midSeries.setData(midLineData);
+
+        // Lower channel line (Cyan Solid #38BDF8)
+        const lowerSeries = chart.addSeries(LineSeries, {
+          color: "#38BDF8",
+          lineWidth: 2,
+          lineStyle: LineStyle.Solid,
+          title: `CHANNEL SUPPORT ($${channel.lower_price.toFixed(2)})`,
+          crosshairMarkerVisible: false,
+          lastValueVisible: true,
+          priceLineVisible: false,
+        });
+        lowerSeries.setData(lowerLineData);
+      }
+    }
+
     // Auto-fit content
     chart.timeScale().fitContent();
 
@@ -226,7 +295,7 @@ export default function LightweightChart({
       chartRef.current = null;
       candlestickSeriesRef.current = null;
     };
-  }, [candles, pools, activePosition, height]);
+  }, [candles, pools, activePosition, channel, height]);
 
   // Real-Time Live Ticker Dynamic Candle Update Effect
   useEffect(() => {
@@ -269,6 +338,26 @@ export default function LightweightChart({
               <strong className="text-[#38BDF8]">${candles[candles.length - 1]?.close}</strong>
             </span>
           )}
+          {channel && (
+            <span className="hidden md:inline-flex items-center gap-1.5 font-mono text-[11px] rounded bg-[#38BDF8]/10 border border-[#38BDF8]/30 px-2 py-0.5 text-[#38BDF8]">
+              <span>KANAL:</span>
+              <strong className="font-bold">{channel.slope_type}</strong>
+              {channel.anchor_high && (
+                <>
+                  <span className="text-[#64748B]">|</span>
+                  <span>SWING H: <strong className="text-white">${channel.anchor_high.price < 1 ? channel.anchor_high.price.toFixed(6) : channel.anchor_high.price.toFixed(2)}</strong></span>
+                </>
+              )}
+              {channel.anchor_low && (
+                <>
+                  <span className="text-[#64748B]">|</span>
+                  <span>SWING L: <strong className="text-white">${channel.anchor_low.price < 1 ? channel.anchor_low.price.toFixed(6) : channel.anchor_low.price.toFixed(2)}</strong></span>
+                </>
+              )}
+              <span className="text-[#64748B]">|</span>
+              <span>H: ${(channel.channel_height).toFixed(2)}</span>
+            </span>
+          )}
           {liveTickPrice && (
             <span className="rounded border border-[#10B981]/50 bg-[#10B981]/15 px-2 py-0.5 font-mono text-[11px] font-bold text-[#10B981] animate-fade-in">
               LIVE TICK: ${liveTickPrice < 1 ? liveTickPrice.toFixed(6) : liveTickPrice.toFixed(2)}
@@ -277,7 +366,7 @@ export default function LightweightChart({
         </div>
         <div className="flex items-center gap-2">
           <span className="font-mono text-[11px] text-[#64748B]">
-            INSTITUTIONAL LIQUIDITY ENGINE v1.0
+            INSTITUTIONAL LIQUIDITY & PARALLEL CHANNEL ENGINE
           </span>
         </div>
       </div>

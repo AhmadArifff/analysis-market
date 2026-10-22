@@ -58,6 +58,34 @@
       "owner_role": "backend-engineer",
       "status": "done",
       "rework_iteration_count": 0
+    },
+    {
+      "id": "T-08",
+      "task": "Implementasi simulasi modal dummy dinamis, nominal lot kustom, kalkulasi dollar PnL, dan auto-stop proteksi likuidasi ($0.00)",
+      "owner_role": "quant-engineer",
+      "status": "done",
+      "rework_iteration_count": 0
+    },
+    {
+      "id": "T-09",
+      "task": "Implementasi strategi Paralel Kanal (Dual Setup: Mantul/Bounce pada batas kanal & Break & Retest sebagai Support/Supply baru), visual overlay chart, dan HUD status monitor",
+      "owner_role": "quant-engineer",
+      "status": "done",
+      "rework_iteration_count": 0
+    },
+    {
+      "id": "T-10",
+      "task": "Implementasi Checklist Skema Strategi Simulasi (Liquidity Sweep, Paralel Kanal, FVG, Killzones, Trend, Volume RVOL), penarikan kanal berbasis Swing High & Swing Low pivots, dan Quick Dashboard Config Controller",
+      "owner_role": "quant-engineer",
+      "status": "done",
+      "rework_iteration_count": 0
+    },
+    {
+      "id": "T-11",
+      "task": "Implementasi Skema Strategi ke-7: Trend Runner (Liquidity Void / No-Sweep Flow via Retail RR Aversion), modul deteksi matematis, integrasi simulator bar replay & backtest, dan toggle checklist dashboard",
+      "owner_role": "quant-engineer",
+      "status": "done",
+      "rework_iteration_count": 0
     }
   ],
   "established_constraints": [

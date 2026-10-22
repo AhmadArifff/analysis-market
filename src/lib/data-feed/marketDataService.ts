@@ -170,9 +170,10 @@ async function fetchYahooCandles(
   startDate?: string,
   endDate?: string
 ): Promise<RealCandle[]> {
-  const yahooSymbol = YAHOO_MAP[symbol] || YAHOO_MAP["BTCUSDT"];
+  const cleanSym = symbol.replace(/[^A-Z0-9]/g, "").toUpperCase();
+  const yahooSymbol = YAHOO_MAP[cleanSym] || YAHOO_MAP[symbol] || (cleanSym.includes("USD") ? "GC=F" : "BTC-USD");
   const { yInterval, factor } = mapYahooInterval(timeframe);
-  const precision = getPrecision(symbol);
+  const precision = getPrecision(cleanSym);
   const cachePolicy = getCachePolicy(timeframe);
 
   let url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=${yInterval}`;
@@ -263,9 +264,10 @@ async function fetchGateioCandles(
   startDate?: string,
   endDate?: string
 ): Promise<RealCandle[]> {
-  const pair = GATEIO_MAP[symbol] || "BTC_USDT";
+  const cleanSym = symbol.replace(/[^A-Z0-9]/g, "").toUpperCase();
+  const pair = GATEIO_MAP[cleanSym] || GATEIO_MAP[symbol] || `${cleanSym.replace("USDT", "")}_USDT`;
   const { gInterval, factor } = mapGateioInterval(timeframe);
-  const precision = getPrecision(symbol);
+  const precision = getPrecision(cleanSym);
   const cachePolicy = getCachePolicy(timeframe);
 
   let url = `https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=${pair}&interval=${gInterval}&limit=1000`;
@@ -423,14 +425,15 @@ export async function getRealCandles(
   startDate?: string,
   endDate?: string
 ): Promise<RealCandle[]> {
-  const isCrypto = CRYPTO_SYMBOLS.has(symbol);
+  const cleanSymbol = symbol.replace(/[^A-Z0-9]/g, "").toUpperCase();
+  const isCrypto = CRYPTO_SYMBOLS.has(cleanSymbol) || cleanSymbol.includes("USDT");
   const isMultiYear = startDate && new Date(startDate).getFullYear() < new Date().getFullYear() - 1;
 
   try {
     // Priority 1: Crypto symbols -> Gate.io (most accurate for USDT pairs)
     if (isCrypto && !isMultiYear) {
       try {
-        const gateData = await fetchGateioCandles(symbol, timeframe, startDate, endDate);
+        const gateData = await fetchGateioCandles(cleanSymbol, timeframe, startDate, endDate);
         if (gateData.length > 0) return gateData;
       } catch (err) {
         console.warn(`[DataFeed] Gate.io failed for ${symbol}:`, err);
@@ -448,7 +451,7 @@ export async function getRealCandles(
     // Priority 3: If crypto and Yahoo failed too, try Gate.io one more time
     if (isCrypto) {
       try {
-        const gateRetry = await fetchGateioCandles(symbol, timeframe, startDate, endDate);
+        const gateRetry = await fetchGateioCandles(cleanSymbol, timeframe, startDate, endDate);
         if (gateRetry.length > 0) return gateRetry;
       } catch (err) {
         console.warn(`[DataFeed] Gate.io retry failed for ${symbol}`);

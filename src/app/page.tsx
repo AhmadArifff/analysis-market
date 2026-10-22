@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import {
   Activity,
@@ -24,6 +24,7 @@ import {
   Calendar,
   Flame,
   BarChart3,
+  Check,
 } from "lucide-react";
 import type { CandleData, LiquidityPool } from "@/components/LightweightChart";
 import {
@@ -32,7 +33,10 @@ import {
   TradeDirectionFilter,
   stepReplaySimulation,
   runFullAutomatedBacktest,
+  calculateTradePnL,
+  StrategySchemaConfig,
 } from "@/lib/quant-engine/simulator";
+import type { ParallelChannel } from "@/lib/quant-engine/parallelChannel";
 import { useRealtimeTicker } from "@/lib/data-feed/useRealtimeTicker";
 import { terminalAudio } from "@/lib/alerts/audioChime";
 import SettingsDrawer, { DEFAULT_SETTINGS, StrategySettings } from "@/components/SettingsDrawer";
@@ -265,6 +269,50 @@ export default function TerminalHome() {
   const [simulationTrades, setSimulationTrades] = useState<ReplayTrade[]>([]);
   const [replayAlert, setReplayAlert] = useState<string | null>(null);
   const [directionFilter, setDirectionFilter] = useState<TradeDirectionFilter>("AUTO");
+  const [activeChannel, setActiveChannel] = useState<ParallelChannel | null>(null);
+
+  // Dummy Capital & Lot Size Simulation State
+  const [dummyCapital, setDummyCapital] = useState<number>(DEFAULT_SETTINGS.initialCapital);
+  const [dummyLotSize, setDummyLotSize] = useState<number>(DEFAULT_SETTINGS.lotSize || 0.10);
+  const [currentBalance, setCurrentBalance] = useState<number>(DEFAULT_SETTINGS.initialCapital);
+  const [isLiquidated, setIsLiquidated] = useState<boolean>(false);
+
+  // Sync state if SettingsDrawer updates initialCapital or lotSize
+  useEffect(() => {
+    if (settings.initialCapital && settings.initialCapital !== dummyCapital) {
+      setDummyCapital(settings.initialCapital);
+      if (simulationTrades.length === 0 && !activePosition) {
+        setCurrentBalance(settings.initialCapital);
+        setIsLiquidated(false);
+      }
+    }
+    if (settings.lotSize && settings.lotSize !== dummyLotSize) {
+      setDummyLotSize(settings.lotSize);
+    }
+  }, [settings.initialCapital, settings.lotSize]);
+
+  // Dynamic Strategy Schema Configuration (Active checklist passed into simulation)
+  const schemaConfig: StrategySchemaConfig = useMemo(() => ({
+    enableLiquiditySweep: settings.enableLiquiditySweep ?? true,
+    enableParallelChannel: settings.enableParallelChannel ?? true,
+    enableFVGConfluence: settings.enableFVGConfluence ?? true,
+    enableKillzones: settings.enableKillzones ?? true,
+    enableTrendFilter: settings.enableTrendFilter ?? true,
+    enableVolumeFilter: settings.enableVolumeFilter ?? true,
+    enableTrendRunner: settings.enableTrendRunner ?? true,
+    channelLookback: settings.channelLookback ?? 25,
+    channelAnchorMode: settings.channelAnchorMode ?? "SWING_HIGHLOW",
+  }), [
+    settings.enableLiquiditySweep,
+    settings.enableParallelChannel,
+    settings.enableFVGConfluence,
+    settings.enableKillzones,
+    settings.enableTrendFilter,
+    settings.enableVolumeFilter,
+    settings.enableTrendRunner,
+    settings.channelLookback,
+    settings.channelAnchorMode,
+  ]);
 
   const [realExhaustion, setRealExhaustion] = useState<{
     consecutive_bars: number;
@@ -273,6 +321,27 @@ export default function TerminalHome() {
     status: string;
     fast_rsi_5: number;
   } | null>(null);
+
+  // Live re-evaluate current bar channel & pools whenever strategy schema settings change
+  useEffect(() => {
+    if (fullCandles.length > 0 && !isPlaying) {
+      const res = stepReplaySimulation(
+        fullCandles,
+        replayIndex,
+        activePosition,
+        activeAsset.symbol,
+        timeframe,
+        directionFilter,
+        settings.minWickRatio,
+        settings.retailRRThreshold,
+        currentBalance,
+        dummyLotSize,
+        schemaConfig
+      );
+      if (res.activePools) setPools(res.activePools);
+      setActiveChannel(res.activeChannel !== undefined ? res.activeChannel : null);
+    }
+  }, [schemaConfig, settings.minWickRatio, settings.retailRRThreshold]);
 
   const activeAsset = watchlist.find((w) => w.symbol === selectedSymbol) || watchlist[0];
 
@@ -311,6 +380,9 @@ export default function TerminalHome() {
     setIsPlaying(false);
     setActivePosition(null);
     setSimulationTrades([]);
+    setIsLiquidated(false);
+    setActiveChannel(null);
+    setCurrentBalance(dummyCapital);
     try {
       const url = `/api/market/candles?symbol=${sym}&timeframe=${tf}&startDate=${start}&endDate=${end}`;
       const res = await fetch(url);
@@ -321,7 +393,7 @@ export default function TerminalHome() {
           const endIdx = json.candles.length - 1;
           setReplayIndex(endIdx);
 
-          // Compute initial pools on latest candles with calibrated settings
+          // Compute initial pools & channel on latest candles with calibrated settings
           const initRes = stepReplaySimulation(
             json.candles,
             endIdx,
@@ -330,17 +402,23 @@ export default function TerminalHome() {
             tf,
             directionFilter,
             settings.minWickRatio,
-            settings.retailRRThreshold
+            settings.retailRRThreshold,
+            dummyCapital,
+            dummyLotSize,
+            schemaConfig
           );
           if (initRes.activePools && initRes.activePools.length > 0) {
             setPools(initRes.activePools);
+          }
+          if (initRes.activeChannel !== undefined) {
+            setActiveChannel(initRes.activeChannel);
           }
 
           if (json.exhaustion) {
             setRealExhaustion(json.exhaustion);
           }
           setReplayAlert(
-            `📊 Berhasil memuat ${json.candles.length} candle [${tf}] (${start} s.d ${end === "now" ? "Sekarang" : end}). Chart berada di posisi terkini ($${json.candles[endIdx]?.close}). Klik [REPLAY DARI AWAL] jika ingin memutar mundur ke 2021!`
+            `📊 Berhasil memuat ${json.candles.length} candle [${tf}] (${start} s.d ${end === "now" ? "Sekarang" : end}). Chart berada di posisi terkini ($${json.candles[endIdx]?.close}). Saldo Modal: $${dummyCapital.toLocaleString()} | Lot: ${dummyLotSize}.`
           );
           setIsLoadingCandles(false);
           return;
@@ -360,8 +438,18 @@ export default function TerminalHome() {
     loadCandles(selectedSymbol, timeframe, startDate, isEndDateNow ? "now" : endDate);
   }, [selectedSymbol, timeframe]);
 
-  // Step Replay Forward Handler with Native Audio Chimes & Webhook Notifications
+  // Step Replay Forward Handler with Native Audio Chimes & Liquidation Auto-Stop
   const handleStepForward = () => {
+    // If modal is depleted or liquidated, stop replay immediately!
+    if (isLiquidated || currentBalance <= 0) {
+      setIsPlaying(false);
+      setIsLiquidated(true);
+      setReplayAlert(
+        "💀 MODAL HABIS ($0.00)! Akun mengalami likuidasi. Simulasi dihentikan. Silakan isi modal dummy untuk melanjutkan."
+      );
+      return;
+    }
+
     if (replayIndex >= fullCandles.length - 1) {
       setIsPlaying(false);
       setReplayAlert("🏁 Bar Replay Selesai! Seluruh histori candle telah di-backtest.");
@@ -379,11 +467,17 @@ export default function TerminalHome() {
       timeframe,
       directionFilter,
       settings.minWickRatio,
-      settings.retailRRThreshold
+      settings.retailRRThreshold,
+      currentBalance,
+      dummyLotSize,
+      schemaConfig
     );
 
     if (stepResult.activePools && stepResult.activePools.length > 0) {
       setPools(stepResult.activePools);
+    }
+    if (stepResult.activeChannel !== undefined) {
+      setActiveChannel(stepResult.activeChannel);
     }
 
     // Trade Opening Event (New position entered on this bar)
@@ -447,7 +541,23 @@ export default function TerminalHome() {
 
     setActivePosition(stepResult.newPosition);
 
-    if (stepResult.sweepAlert) {
+    // Update running balance from step result
+    if (stepResult.currentBalance !== undefined) {
+      setCurrentBalance(stepResult.currentBalance);
+    }
+
+    // Check liquidation condition: if capital runs out, stop simulation immediately!
+    if (stepResult.isLiquidated || (stepResult.currentBalance !== undefined && stepResult.currentBalance <= 0)) {
+      setIsLiquidated(true);
+      setIsPlaying(false);
+      setCurrentBalance(0);
+      setReplayAlert(
+        "💀 MODAL HABIS ($0.00)! Kerugian mencapai batas modal dummy. Akun terkena Margin Call/Likuidasi. Simulasi berhenti otomatis!"
+      );
+      if (settings.soundEnabled) {
+        terminalAudio.playLossChime();
+      }
+    } else if (stepResult.sweepAlert) {
       setReplayAlert(stepResult.sweepAlert);
     }
   };
@@ -466,18 +576,25 @@ export default function TerminalHome() {
         timeframe,
         directionFilter,
         settings.minWickRatio,
-        settings.retailRRThreshold
+        settings.retailRRThreshold,
+        currentBalance,
+        dummyLotSize,
+        schemaConfig
       );
       if (res.activePools) setPools(res.activePools);
+      if (res.activeChannel !== undefined) setActiveChannel(res.activeChannel);
       setActivePosition(res.newPosition);
     }
   };
 
   // Reset Replay
-  const handleResetReplay = () => {
+  const handleResetReplay = (targetBalance?: number) => {
     setIsPlaying(false);
     setActivePosition(null);
     setSimulationTrades([]);
+    setIsLiquidated(false);
+    const initialBal = targetBalance !== undefined ? targetBalance : dummyCapital;
+    setCurrentBalance(initialBal);
     const startIdx = Math.max(10, Math.floor(fullCandles.length * 0.35));
     setReplayIndex(startIdx);
     const res = stepReplaySimulation(
@@ -488,13 +605,17 @@ export default function TerminalHome() {
       timeframe,
       directionFilter,
       settings.minWickRatio,
-      settings.retailRRThreshold
+      settings.retailRRThreshold,
+      initialBal,
+      dummyLotSize,
+      schemaConfig
     );
     if (res.activePools) setPools(res.activePools);
-    setReplayAlert("🔄 Bar Replay di-reset ke histori masa lalu.");
+    if (res.activeChannel !== undefined) setActiveChannel(res.activeChannel);
+    setReplayAlert(`🔄 Bar Replay di-reset ke histori masa lalu. Modal siap: $${initialBal.toLocaleString()} | Lot: ${dummyLotSize}`);
   };
 
-  // Run Full Automated Backtest across history
+  // Run Full Automated Backtest across history with dummy capital & lot size
   const handleRunFullBacktest = () => {
     setIsPlaying(false);
     const result = runFullAutomatedBacktest(
@@ -503,24 +624,43 @@ export default function TerminalHome() {
       timeframe,
       directionFilter,
       settings.minWickRatio,
-      settings.retailRRThreshold
+      settings.retailRRThreshold,
+      dummyCapital,
+      dummyLotSize,
+      schemaConfig
     );
     setSimulationTrades(result.trades);
     setActivePosition(null);
     setReplayIndex(fullCandles.length - 1);
-    setReplayAlert(
-      `⚡ Full Backtest Selesai! ${result.trades.length} trade dieksekusi [Bias: ${directionFilter}]. Win Rate: ${result.summary.win_rate}%, Net Return: ${result.summary.net_return_pct}%`
-    );
+    setCurrentBalance(result.summary.final_balance);
+    setIsLiquidated(result.summary.is_liquidated);
+
+    if (result.summary.is_liquidated) {
+      setReplayAlert(
+        `💀 Full Backtest Terhenti di Bar #${result.summary.liquidation_bar || "?"}! MODAL HABIS ($0.00) setelah ${result.trades.length} trade [Lot: ${dummyLotSize}]. Akun terkena Margin Call/Likuidasi.`
+      );
+      if (settings.soundEnabled) {
+        terminalAudio.playLossChime();
+      }
+    } else {
+      setReplayAlert(
+        `⚡ Full Backtest Selesai! ${result.trades.length} trade dieksekusi [Lot: ${dummyLotSize}]. Win Rate: ${result.summary.win_rate}%, Net Profit: ${result.summary.net_profit_usd >= 0 ? "+" : ""}$${result.summary.net_profit_usd.toLocaleString()} (${result.summary.net_return_pct}%), Saldo Akhir: $${result.summary.final_balance.toLocaleString()}`
+      );
+    }
   };
 
   // Replay Auto-Play Loop
   useEffect(() => {
     if (!isPlaying) return;
+    if (isLiquidated || currentBalance <= 0) {
+      setIsPlaying(false);
+      return;
+    }
     const timer = setInterval(() => {
       handleStepForward();
     }, playSpeed);
     return () => clearInterval(timer);
-  }, [isPlaying, replayIndex, fullCandles, playSpeed, activePosition, directionFilter, settings]);
+  }, [isPlaying, replayIndex, fullCandles, playSpeed, activePosition, directionFilter, settings, currentBalance, isLiquidated, dummyLotSize]);
 
   // Dynamic KPI Metrics derived from simulationTrades
   const winningTrades = simulationTrades.filter((t) => t.result === "WIN");
@@ -533,6 +673,7 @@ export default function TerminalHome() {
   const grossLoss = Math.abs(losingTrades.reduce((acc, t) => acc + t.pnl_pct, 0));
   const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 9.99 : 1.0;
   const netReturn = grossProfit - grossLoss;
+  const netProfitUsd = parseFloat((currentBalance - dummyCapital).toFixed(2));
 
   // Handle Excel Export (sends simulated trades via POST)
   const handleExportExcel = async () => {
@@ -548,7 +689,7 @@ export default function TerminalHome() {
             total_trades: simulationTrades.length,
             win_rate: parseFloat(winRate.toFixed(1)),
             profit_factor: parseFloat(profitFactor.toFixed(2)),
-            net_profit_usd: parseFloat((netReturn * 100).toFixed(2)),
+            net_profit_usd: netProfitUsd,
             net_profit_pct: parseFloat(netReturn.toFixed(2)),
             max_drawdown_pct: 6.5,
             sharpe_ratio: 1.85,
@@ -585,12 +726,19 @@ export default function TerminalHome() {
   const currentBar = visibleCandles[visibleCandles.length - 1];
   const currentPrice = currentBar ? currentBar.close : activeAsset.last_price;
 
-  // Unrealized PnL of active position
-  const activeUnrealized = activePosition
-    ? activePosition.side === "LONG"
-      ? ((currentPrice - activePosition.entry_px) / activePosition.entry_px) * 100
-      : ((activePosition.entry_px - currentPrice) / activePosition.entry_px) * 100
-    : 0;
+  // Unrealized PnL of active position in % and USD
+  const activeTradePnL = activePosition
+    ? calculateTradePnL(
+        activePosition.symbol,
+        activePosition.side,
+        activePosition.entry_px,
+        currentPrice,
+        activePosition.lot_size || dummyLotSize
+      )
+    : { pnlPct: 0, pnlUsd: 0 };
+  const activeUnrealized = activeTradePnL.pnlPct;
+  const activeUnrealizedUsd = activeTradePnL.pnlUsd;
+  const activeEquity = Math.max(0, parseFloat((currentBalance + activeUnrealizedUsd).toFixed(2)));
 
   return (
     <div className="min-h-screen bg-[#090A0F] text-[#E2E8F0]">
@@ -930,9 +1078,88 @@ export default function TerminalHome() {
                     </span>
                   ) : (
                     <span className="rounded bg-[#D97706]/20 border border-[#D97706]/50 px-2 py-0.5 font-mono text-[10px] font-bold text-[#F59E0B] animate-pulse">
-                      ⏪ REPLAY HISTORI MASA LALU (${currentPrice})
+                      ⏪ REPLAY HISTORI (${currentPrice})
                     </span>
                   )}
+                </div>
+
+                {/* Modal Dummy & Lot Size Dynamic Configuration */}
+                <div className="flex flex-wrap items-center gap-2 rounded border border-[#1F2430] bg-[#141824] px-2.5 py-1">
+                  {/* Dummy Capital Input */}
+                  <div className="flex items-center gap-1">
+                    <span className="font-mono text-[10px] font-bold text-[#8E9BAE]">MODAL:</span>
+                    <div className="relative flex items-center">
+                      <span className="absolute left-1.5 text-[10px] font-mono text-[#64748B]">$</span>
+                      <input
+                        type="number"
+                        min={10}
+                        step={100}
+                        value={dummyCapital}
+                        onChange={(e) => {
+                          const val = Math.max(1, parseFloat(e.target.value) || 0);
+                          setDummyCapital(val);
+                          if (simulationTrades.length === 0 && !activePosition) {
+                            setCurrentBalance(val);
+                            setIsLiquidated(false);
+                          }
+                        }}
+                        className="w-20 rounded bg-[#0A0D14] pl-4 pr-1 py-0.5 font-mono text-xs font-semibold text-[#F8FAFC] border border-[#1F2430] focus:border-[#38BDF8] focus:outline-none"
+                        title="Isi modal dummy simulasi berapa saja (misal $100, $1,000, $10,000)"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Nominal Lot Size Input */}
+                  <div className="flex items-center gap-1 border-l border-[#1F2430] pl-2">
+                    <span className="font-mono text-[10px] font-bold text-[#8E9BAE]">LOT:</span>
+                    <input
+                      type="number"
+                      min={0.001}
+                      step={0.01}
+                      value={dummyLotSize}
+                      onChange={(e) => {
+                        const val = Math.max(0.001, parseFloat(e.target.value) || 0.01);
+                        setDummyLotSize(val);
+                      }}
+                      className="w-16 rounded bg-[#0A0D14] px-1.5 py-0.5 font-mono text-xs font-semibold text-[#F8FAFC] border border-[#1F2430] focus:border-[#38BDF8] focus:outline-none"
+                      title="Isi nominal lot size berapa saja (misal 0.01, 0.10, 1.0, 5.0)"
+                    />
+                  </div>
+
+                  {/* Dynamic Saldo Live Badge */}
+                  <div className="flex items-center gap-1.5 border-l border-[#1F2430] pl-2">
+                    <span className="font-mono text-[10px] font-bold text-[#8E9BAE]">SALDO:</span>
+                    {isLiquidated || currentBalance <= 0 ? (
+                      <span className="flex items-center gap-1 rounded bg-[#F43F5E]/20 border border-[#F43F5E] px-2 py-0.5 font-mono text-[10px] font-extrabold text-[#F43F5E] animate-pulse">
+                        💀 $0.00 (LIKUIDASI)
+                      </span>
+                    ) : (
+                      <span
+                        className={`rounded px-2 py-0.5 font-mono text-[11px] font-bold border ${
+                          currentBalance >= dummyCapital
+                            ? "bg-[#10B981]/15 border-[#10B981]/50 text-[#10B981]"
+                            : "bg-[#F59E0B]/15 border-[#F59E0B]/50 text-[#F59E0B]"
+                        }`}
+                      >
+                        ${currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    )}
+
+                    {(isLiquidated || currentBalance <= 0) && (
+                      <button
+                        onClick={() => {
+                          const refill = dummyCapital > 0 ? dummyCapital : 10000;
+                          setCurrentBalance(refill);
+                          setIsLiquidated(false);
+                          setReplayAlert(`💰 Modal dummy berhasil diisi ulang menjadi $${refill.toLocaleString()}!`);
+                        }}
+                        className="rounded bg-[#10B981] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#090A0F] hover:bg-[#10B981]/90 transition active:scale-95"
+                        title="Isi ulang saldo modal dummy"
+                      >
+                        + ISI ULANG
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Player Controls */}
@@ -943,6 +1170,8 @@ export default function TerminalHome() {
                       setIsPlaying(false);
                       setActivePosition(null);
                       setSimulationTrades([]);
+                      setIsLiquidated(false);
+                      setCurrentBalance(dummyCapital);
                       const startIdx = Math.max(5, Math.min(25, Math.floor(fullCandles.length * 0.05)));
                       setReplayIndex(startIdx);
                       const res = stepReplaySimulation(
@@ -953,10 +1182,14 @@ export default function TerminalHome() {
                         timeframe,
                         directionFilter,
                         settings.minWickRatio,
-                        settings.retailRRThreshold
+                        settings.retailRRThreshold,
+                        dummyCapital,
+                        dummyLotSize,
+                        schemaConfig
                       );
                       if (res.activePools) setPools(res.activePools);
-                      setReplayAlert(`⏪ Memutar mundur ke awal (${formatBarTime(fullCandles[startIdx]?.time)} - $${fullCandles[startIdx]?.close}). Tekan PLAY untuk mulai simulasi!`);
+                      if (res.activeChannel !== undefined) setActiveChannel(res.activeChannel);
+                      setReplayAlert(`⏪ Memutar mundur ke awal (${formatBarTime(fullCandles[startIdx]?.time)} - $${fullCandles[startIdx]?.close}). Modal: $${dummyCapital.toLocaleString()} | Lot: ${dummyLotSize}. Tekan PLAY untuk mulai simulasi!`);
                     }}
                     className="flex items-center gap-1 rounded border border-[#D97706]/60 bg-[#D97706]/15 px-2 py-1 font-mono text-xs text-[#F59E0B] hover:bg-[#D97706]/25 active:scale-95 transition"
                     title="Mulai Bar Replay dari candle masa lalu"
@@ -979,10 +1212,14 @@ export default function TerminalHome() {
                         timeframe,
                         directionFilter,
                         settings.minWickRatio,
-                        settings.retailRRThreshold
+                        settings.retailRRThreshold,
+                        currentBalance,
+                        dummyLotSize,
+                        schemaConfig
                       );
                       if (res.activePools) setPools(res.activePools);
-                      setReplayAlert(`⏩ Melompat ke candle terkini (LIVE / NOW: $${fullCandles[lastIdx]?.close}).`);
+                      if (res.activeChannel !== undefined) setActiveChannel(res.activeChannel);
+                      setReplayAlert(`⏩ Melompat ke candle terkini (LIVE / NOW: $${fullCandles[lastIdx]?.close}). Saldo: $${currentBalance.toLocaleString()}`);
                     }}
                     className="flex items-center gap-1 rounded border border-[#10B981]/60 bg-[#10B981]/15 px-2 py-1 font-mono text-xs text-[#10B981] hover:bg-[#10B981]/25 active:scale-95 transition"
                     title="Lompat ke candle paling baru (NOW)"
@@ -1002,13 +1239,21 @@ export default function TerminalHome() {
 
                   {/* Play / Pause */}
                   <button
-                    onClick={() => setIsPlaying(!isPlaying)}
+                    onClick={() => {
+                      if (isLiquidated || currentBalance <= 0) {
+                        setReplayAlert("💀 Modal dummy habis ($0.00)! Silakan klik tombol '+ ISI ULANG' modal dummy untuk melanjutkan simulasi.");
+                        return;
+                      }
+                      setIsPlaying(!isPlaying);
+                    }}
                     className={`flex items-center gap-1.5 rounded px-3.5 py-1 font-mono text-xs font-bold transition active:scale-95 ${
                       isPlaying
                         ? "bg-[#F43F5E] text-white shadow-[0_0_12px_rgba(244,63,94,0.4)]"
+                        : isLiquidated || currentBalance <= 0
+                        ? "bg-[#64748B]/30 text-[#64748B] border border-[#64748B]/40 cursor-not-allowed"
                         : "bg-[#10B981] text-[#090A0F] shadow-[0_0_12px_rgba(16,185,129,0.4)] hover:bg-[#10B981]/90"
                     }`}
-                    title={isPlaying ? "Jeda Simulasi" : "Mulai Auto Bar Replay"}
+                    title={isLiquidated || currentBalance <= 0 ? "Modal habis (Likuidasi). Isi ulang modal terlebih dahulu." : (isPlaying ? "Jeda Simulasi" : "Mulai Auto Bar Replay")}
                   >
                     {isPlaying ? (
                       <>
@@ -1094,7 +1339,7 @@ export default function TerminalHome() {
                   <button
                     onClick={handleRunFullBacktest}
                     className="flex items-center gap-1 rounded border border-[#38BDF8]/50 bg-[#38BDF8]/15 px-3 py-1 font-mono text-xs font-bold text-[#38BDF8] hover:bg-[#38BDF8]/25 active:scale-95 transition"
-                    title="Jalankan algoritma ke seluruh candle sekaligus"
+                    title="Jalankan algoritma ke seluruh candle sekaligus dengan modal dummy & nominal lot"
                   >
                     <FastForward className="h-3.5 w-3.5" />
                     <span>INSTANT BACKTEST</span>
@@ -1113,13 +1358,318 @@ export default function TerminalHome() {
                   onChange={(e) => {
                     const idx = parseInt(e.target.value);
                     setReplayIndex(idx);
-                    const res = stepReplaySimulation(fullCandles, idx, activePosition, activeAsset.symbol, timeframe, directionFilter);
+                    const res = stepReplaySimulation(
+                      fullCandles,
+                      idx,
+                      activePosition,
+                      activeAsset.symbol,
+                      timeframe,
+                      directionFilter,
+                      settings.minWickRatio,
+                      settings.retailRRThreshold,
+                      currentBalance,
+                      dummyLotSize,
+                      schemaConfig
+                    );
                     if (res.activePools) setPools(res.activePools);
+                    if (res.activeChannel !== undefined) setActiveChannel(res.activeChannel);
                     setActivePosition(res.newPosition);
                   }}
                   className="w-full accent-[#38BDF8] cursor-pointer h-1.5 bg-[#1F2430] rounded-lg"
                 />
                 <span className="font-mono text-[10px] text-[#64748B]">NOW</span>
+              </div>
+
+              {/* Interactive Strategy Schemas Checklist & Quick Config Bar */}
+              <div className="pt-2 border-t border-[#1F2430]/70 flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-bold text-[#8E9BAE] uppercase flex items-center gap-1 mr-1">
+                    <Sliders className="h-3 w-3 text-[#38BDF8]" />
+                    SKEMA STRATEGI AKTIF:
+                  </span>
+
+                  {/* 1. Liquidity Sweep Toggle */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        enableLiquiditySweep: !prev.enableLiquiditySweep,
+                      }))
+                    }
+                    className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-bold border transition ${
+                      settings.enableLiquiditySweep
+                        ? "bg-[#10B981]/15 border-[#10B981]/50 text-[#10B981]"
+                        : "bg-[#141824] border-[#1F2430] text-[#64748B] hover:text-[#94A3B8]"
+                    }`}
+                    title="Aktifkan/Nonaktifkan Entry Liquidity Sweep & Stop Hunt"
+                  >
+                    <span
+                      className={`flex h-3 w-3 items-center justify-center rounded-sm border ${
+                        settings.enableLiquiditySweep
+                          ? "border-[#10B981] bg-[#10B981]"
+                          : "border-[#475569] bg-transparent"
+                      }`}
+                    >
+                      {settings.enableLiquiditySweep && (
+                        <Check className="h-2.5 w-2.5 text-[#090A0F] stroke-[3]" />
+                      )}
+                    </span>
+                    <span>1. Liquidity Sweep</span>
+                  </button>
+
+                  {/* 2. Parallel Channel Toggle */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        enableParallelChannel: !prev.enableParallelChannel,
+                      }))
+                    }
+                    className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-bold border transition ${
+                      settings.enableParallelChannel
+                        ? "bg-[#38BDF8]/15 border-[#38BDF8]/50 text-[#38BDF8]"
+                        : "bg-[#141824] border-[#1F2430] text-[#64748B] hover:text-[#94A3B8]"
+                    }`}
+                    title="Aktifkan/Nonaktifkan Paralel Kanal (Bounce & Break-Retest)"
+                  >
+                    <span
+                      className={`flex h-3 w-3 items-center justify-center rounded-sm border ${
+                        settings.enableParallelChannel
+                          ? "border-[#38BDF8] bg-[#38BDF8]"
+                          : "border-[#475569] bg-transparent"
+                      }`}
+                    >
+                      {settings.enableParallelChannel && (
+                        <Check className="h-2.5 w-2.5 text-[#090A0F] stroke-[3]" />
+                      )}
+                    </span>
+                    <span>
+                      2. Paralel Kanal ({settings.channelAnchorMode === "SWING_HIGHLOW" ? "Swing H/L" : "Linier"})
+                    </span>
+                  </button>
+
+                  {/* 3. FVG Imbalance Toggle */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        enableFVGConfluence: !prev.enableFVGConfluence,
+                      }))
+                    }
+                    className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-bold border transition ${
+                      settings.enableFVGConfluence
+                        ? "bg-[#D97706]/15 border-[#D97706]/50 text-[#F59E0B]"
+                        : "bg-[#141824] border-[#1F2430] text-[#64748B] hover:text-[#94A3B8]"
+                    }`}
+                    title="Aktifkan/Nonaktifkan Fair Value Gap Imbalance Confluence"
+                  >
+                    <span
+                      className={`flex h-3 w-3 items-center justify-center rounded-sm border ${
+                        settings.enableFVGConfluence
+                          ? "border-[#F59E0B] bg-[#F59E0B]"
+                          : "border-[#475569] bg-transparent"
+                      }`}
+                    >
+                      {settings.enableFVGConfluence && (
+                        <Check className="h-2.5 w-2.5 text-[#090A0F] stroke-[3]" />
+                      )}
+                    </span>
+                    <span>3. FVG Imbalance</span>
+                  </button>
+
+                  {/* 4. Session Killzones Toggle */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        enableKillzones: !prev.enableKillzones,
+                      }))
+                    }
+                    className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-bold border transition ${
+                      settings.enableKillzones
+                        ? "bg-[#A855F7]/15 border-[#A855F7]/50 text-[#C084FC]"
+                        : "bg-[#141824] border-[#1F2430] text-[#64748B] hover:text-[#94A3B8]"
+                    }`}
+                    title="Aktifkan/Nonaktifkan Session Killzones (London & NY)"
+                  >
+                    <span
+                      className={`flex h-3 w-3 items-center justify-center rounded-sm border ${
+                        settings.enableKillzones
+                          ? "border-[#C084FC] bg-[#C084FC]"
+                          : "border-[#475569] bg-transparent"
+                      }`}
+                    >
+                      {settings.enableKillzones && (
+                        <Check className="h-2.5 w-2.5 text-[#090A0F] stroke-[3]" />
+                      )}
+                    </span>
+                    <span>4. Session Killzones</span>
+                  </button>
+
+                  {/* 5. Macro Trend Toggle */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        enableTrendFilter: !prev.enableTrendFilter,
+                      }))
+                    }
+                    className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-bold border transition ${
+                      settings.enableTrendFilter
+                        ? "bg-[#06B6D4]/15 border-[#06B6D4]/50 text-[#22D3EE]"
+                        : "bg-[#141824] border-[#1F2430] text-[#64748B] hover:text-[#94A3B8]"
+                    }`}
+                    title="Aktifkan/Nonaktifkan Trend Filter (EMA 21/50 + ADX 14)"
+                  >
+                    <span
+                      className={`flex h-3 w-3 items-center justify-center rounded-sm border ${
+                        settings.enableTrendFilter
+                          ? "border-[#22D3EE] bg-[#22D3EE]"
+                          : "border-[#475569] bg-transparent"
+                      }`}
+                    >
+                      {settings.enableTrendFilter && (
+                        <Check className="h-2.5 w-2.5 text-[#090A0F] stroke-[3]" />
+                      )}
+                    </span>
+                    <span>5. Trend Filter</span>
+                  </button>
+
+                  {/* 6. Volume RVOL Filter Toggle */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        enableVolumeFilter: !prev.enableVolumeFilter,
+                      }))
+                    }
+                    className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-bold border transition ${
+                      settings.enableVolumeFilter
+                        ? "bg-[#EC4899]/15 border-[#EC4899]/50 text-[#F472B6]"
+                        : "bg-[#141824] border-[#1F2430] text-[#64748B] hover:text-[#94A3B8]"
+                    }`}
+                    title="Aktifkan/Nonaktifkan Volume RVOL Filter (Pinbar Volume Spike)"
+                  >
+                    <span
+                      className={`flex h-3 w-3 items-center justify-center rounded-sm border ${
+                        settings.enableVolumeFilter
+                          ? "border-[#F472B6] bg-[#F472B6]"
+                          : "border-[#475569] bg-transparent"
+                      }`}
+                    >
+                      {settings.enableVolumeFilter && (
+                        <Check className="h-2.5 w-2.5 text-[#090A0F] stroke-[3]" />
+                      )}
+                    </span>
+                    <span>6. RVOL Spike</span>
+                  </button>
+
+                  {/* 7. Trend Runner Toggle */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        enableTrendRunner: !prev.enableTrendRunner,
+                      }))
+                    }
+                    className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-bold border transition ${
+                      settings.enableTrendRunner
+                        ? "bg-[#14B8A6]/15 border-[#14B8A6]/50 text-[#2DD4BF]"
+                        : "bg-[#141824] border-[#1F2430] text-[#64748B] hover:text-[#94A3B8]"
+                    }`}
+                    title="Aktifkan/Nonaktifkan Skema Trend Runner (Liquidity Void / No-Sweep Flow via Retail RR Aversion)"
+                  >
+                    <span
+                      className={`flex h-3 w-3 items-center justify-center rounded-sm border ${
+                        settings.enableTrendRunner
+                          ? "border-[#2DD4BF] bg-[#2DD4BF]"
+                          : "border-[#475569] bg-transparent"
+                      }`}
+                    >
+                      {settings.enableTrendRunner && (
+                        <Check className="h-2.5 w-2.5 text-[#090A0F] stroke-[3]" />
+                      )}
+                    </span>
+                    <span>7. Trend Runner</span>
+                  </button>
+                </div>
+
+                {/* Quick Channel Anchor Mode Selector & Full Settings Link */}
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 bg-[#121622] border border-[#1F2430] rounded px-2 py-1">
+                    <span className="text-[10px] text-[#64748B]">Patokan Kanal:</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          channelAnchorMode:
+                            prev.channelAnchorMode === "SWING_HIGHLOW"
+                              ? "REGRESSION"
+                              : "SWING_HIGHLOW",
+                        }))
+                      }
+                      className="font-bold text-[#38BDF8] hover:underline flex items-center gap-1 text-[10px]"
+                      title="Klik untuk mengubah patokan kanal antara Swing High & Low vs Linier Regresi"
+                    >
+                      {settings.channelAnchorMode === "SWING_HIGHLOW"
+                        ? "🎯 SWING HIGH & LOW"
+                        : "📈 REGRESI LINIER"}
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsSettingsOpen(true)}
+                    className="flex items-center gap-1 rounded border border-[#1F2430] bg-[#141824] px-2 py-1 text-[10px] font-semibold text-[#94A3B8] hover:text-white hover:border-[#38BDF8] transition"
+                  >
+                    <Sliders className="h-3 w-3 text-[#38BDF8]" />
+                    <span>SEMUA CONFIG</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Liquidation Stop Banner (When Capital is Depleted) */}
+          {(isLiquidated || currentBalance <= 0) && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-[#F43F5E] bg-[#2A0E17] p-3.5 font-mono text-xs text-[#F8FAFC] shadow-[0_0_20px_rgba(244,63,94,0.3)] animate-pulse">
+              <div className="flex items-center gap-2.5">
+                <span className="text-xl">💀</span>
+                <div>
+                  <div className="font-bold text-[#F43F5E] text-sm tracking-wide">
+                    SIMULASI BERHENTI: MODAL DUMMY HABIS (SALDO $0.00 / LIKUIDASI)!
+                  </div>
+                  <div className="text-[#FDA4AF] text-[11px] mt-0.5">
+                    Kerugian posisi telah menguras modal dummy (${dummyCapital.toLocaleString()}) dengan Lot {dummyLotSize}. Simulasi otomatis dihentikan untuk mencegah minus.
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const refill = dummyCapital > 0 ? dummyCapital : 10000;
+                    setCurrentBalance(refill);
+                    setIsLiquidated(false);
+                    setReplayAlert(`💰 Modal dummy berhasil diisi ulang menjadi $${refill.toLocaleString()}!`);
+                  }}
+                  className="rounded bg-[#10B981] px-3 py-1.5 font-mono text-xs font-bold text-[#090A0F] hover:bg-[#10B981]/90 transition active:scale-95 shadow-md"
+                >
+                  💰 ISI ULANG MODAL (${dummyCapital.toLocaleString()})
+                </button>
+                <button
+                  onClick={() => handleResetReplay(dummyCapital)}
+                  className="rounded border border-[#1F2430] bg-[#141824] px-3 py-1.5 font-mono text-xs font-semibold text-[#94A3B8] hover:text-white transition"
+                >
+                  🔄 RESET KE AWAL
+                </button>
               </div>
             </div>
           )}
@@ -1153,6 +1703,9 @@ export default function TerminalHome() {
                 >
                   ACTIVE {activePosition.side}
                 </span>
+                <span className="rounded bg-[#141824] border border-[#1F2430] px-1.5 py-0.5 text-[10px] text-[#38BDF8]">
+                  Lot: <strong>{activePosition.lot_size || dummyLotSize}</strong>
+                </span>
                 <span className="text-[#94A3B8]">
                   Entry: <strong className="text-[#F8FAFC]">${activePosition.entry_px}</strong>
                 </span>
@@ -1174,7 +1727,10 @@ export default function TerminalHome() {
                   }`}
                 >
                   Unrealized: {activeUnrealized >= 0 ? "+" : ""}
-                  {activeUnrealized.toFixed(2)}%
+                  {activeUnrealized.toFixed(2)}% ({activeUnrealizedUsd >= 0 ? "+" : ""}${activeUnrealizedUsd.toFixed(2)})
+                </span>
+                <span className="text-[11px] text-[#8E9BAE] border-l border-[#1F2430] pl-3">
+                  Est. Saldo: <strong className="text-white">${activeEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
                 </span>
               </div>
             </div>
@@ -1194,6 +1750,7 @@ export default function TerminalHome() {
               activePosition={activePosition}
               liveTickPrice={liveTick?.price}
               height={520}
+              channel={activeChannel}
             />
           )}
 
@@ -1241,11 +1798,14 @@ export default function TerminalHome() {
                     <th className="py-2">EXIT TIME</th>
                     <th className="py-2">SYMBOL</th>
                     <th className="py-2">SIDE</th>
+                    <th className="py-2 text-right">LOT</th>
                     <th className="py-2 text-right">ENTRY</th>
                     <th className="py-2 text-right">STOP LOSS</th>
                     <th className="py-2 text-right">TAKE PROFIT</th>
                     <th className="py-2 text-right">EXIT PX</th>
                     <th className="py-2 text-right">PNL %</th>
+                    <th className="py-2 text-right">PNL ($)</th>
+                    <th className="py-2 text-right">SALDO ($)</th>
                     <th className="py-2 text-center">RESULT</th>
                     <th className="py-2">NOTES</th>
                   </tr>
@@ -1268,6 +1828,9 @@ export default function TerminalHome() {
                           {activePosition.side}
                         </span>
                       </td>
+                      <td className="py-2.5 text-right font-mono text-[#38BDF8] font-semibold">
+                        {activePosition.lot_size || dummyLotSize}
+                      </td>
                       <td className="py-2.5 text-right font-semibold">${activePosition.entry_px}</td>
                       <td className="py-2.5 text-right text-[#F43F5E]">${activePosition.sl_px}</td>
                       <td className="py-2.5 text-right text-[#10B981]">${activePosition.tp_px}</td>
@@ -1279,6 +1842,17 @@ export default function TerminalHome() {
                       >
                         {activeUnrealized >= 0 ? "+" : ""}
                         {activeUnrealized.toFixed(2)}%
+                      </td>
+                      <td
+                        className={`py-2.5 text-right font-bold ${
+                          activeUnrealizedUsd >= 0 ? "text-[#10B981]" : "text-[#F43F5E]"
+                        }`}
+                      >
+                        {activeUnrealizedUsd >= 0 ? "+" : ""}
+                        ${activeUnrealizedUsd.toFixed(2)}
+                      </td>
+                      <td className="py-2.5 text-right font-mono font-semibold text-[#E2E8F0]">
+                        ${activeEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                       <td className="py-2.5 text-center">
                         <span className="rounded bg-[#38BDF8]/20 px-2 py-0.5 text-[10px] font-bold text-[#38BDF8] animate-pulse">
@@ -1308,6 +1882,9 @@ export default function TerminalHome() {
                           {t.side}
                         </span>
                       </td>
+                      <td className="py-2.5 text-right font-mono text-[#94A3B8]">
+                        {t.lot_size !== undefined ? t.lot_size : dummyLotSize}
+                      </td>
                       <td className="py-2.5 text-right">${t.entry_px}</td>
                       <td className="py-2.5 text-right text-[#F43F5E]">${t.sl_px}</td>
                       <td className="py-2.5 text-right text-[#10B981]">${t.tp_px}</td>
@@ -1319,6 +1896,16 @@ export default function TerminalHome() {
                       >
                         {t.pnl_pct >= 0 ? "+" : ""}
                         {t.pnl_pct.toFixed(2)}%
+                      </td>
+                      <td
+                        className={`py-2.5 text-right font-bold ${
+                          t.pnl_usd !== undefined && t.pnl_usd >= 0 ? "text-[#10B981]" : "text-[#F43F5E]"
+                        }`}
+                      >
+                        {t.pnl_usd !== undefined ? (t.pnl_usd >= 0 ? "+" : "") + "$" + t.pnl_usd.toFixed(2) : "-"}
+                      </td>
+                      <td className="py-2.5 text-right font-mono font-semibold text-[#E2E8F0]">
+                        {t.balance_after !== undefined ? "$" + t.balance_after.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "-"}
                       </td>
                       <td className="py-2.5 text-center">
                         <span
@@ -1337,7 +1924,7 @@ export default function TerminalHome() {
 
                   {!activePosition && simulationTrades.length === 0 && (
                     <tr>
-                      <td colSpan={11} className="py-8 text-center text-[#64748B]">
+                      <td colSpan={14} className="py-8 text-center text-[#64748B]">
                         Belum ada trade yang dieksekusi. Klik <strong className="text-[#10B981]">[ ▶ PLAY ]</strong> atau{" "}
                         <strong className="text-[#38BDF8]">[ NEXT BAR ]</strong> pada Bar Replay Controller di atas untuk
                         memulai pergerakan candle dan memicu deteksi liquidity sweep otomatis!
@@ -1352,7 +1939,114 @@ export default function TerminalHome() {
 
         {/* Right Column: Quantitative Confluence & Intelligence Panel (4 cols) */}
         <div className="space-y-4 xl:col-span-4">
-          {/* A. Confluence Score Gauge Card */}
+          {/* A. Dummy Capital & Live Account Performance Card */}
+          <div className="rounded border border-[#1F2430] bg-[#0E1118] p-5">
+            <div className="flex items-center justify-between border-b border-[#1F2430] pb-2.5">
+              <span className="font-mono text-xs font-semibold text-[#8E9BAE]">
+                SIMULASI MODAL & SALDO
+              </span>
+              <span
+                className={`rounded px-2 py-0.5 font-mono text-[10px] font-bold ${
+                  isLiquidated || currentBalance <= 0
+                    ? "bg-[#F43F5E]/20 text-[#F43F5E] border border-[#F43F5E]"
+                    : currentBalance >= dummyCapital
+                    ? "bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/40"
+                    : "bg-[#F59E0B]/15 text-[#F59E0B] border border-[#F59E0B]/40"
+                }`}
+              >
+                {isLiquidated || currentBalance <= 0
+                  ? "💀 LIKUIDASI / STOPPED"
+                  : currentBalance >= dummyCapital
+                  ? "🟢 PROFITABLE"
+                  : "🟠 DRAWDOWN"}
+              </span>
+            </div>
+
+            <div className="my-4">
+              <span className="font-mono text-[11px] text-[#64748B]">SALDO TERKINI</span>
+              <div className="flex items-baseline gap-2">
+                <span
+                  className={`font-mono text-3xl font-extrabold tracking-tight ${
+                    isLiquidated || currentBalance <= 0
+                      ? "text-[#F43F5E]"
+                      : currentBalance >= dummyCapital
+                      ? "text-[#10B981]"
+                      : "text-[#F59E0B]"
+                  }`}
+                >
+                  ${currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                <span className="font-mono text-xs text-[#64748B]">USD</span>
+              </div>
+            </div>
+
+            <div className="space-y-2 border-t border-[#1F2430] pt-3 text-xs font-mono">
+              <div className="flex items-center justify-between text-[#94A3B8]">
+                <span>Modal Awal (Dummy)</span>
+                <span className="text-[#F8FAFC] font-semibold">${dummyCapital.toLocaleString()}</span>
+              </div>
+              <div className="flex items-center justify-between text-[#94A3B8]">
+                <span>Lot Nominal Terpasang</span>
+                <span className="text-[#38BDF8] font-semibold">{dummyLotSize} Lot</span>
+              </div>
+              <div className="flex items-center justify-between text-[#94A3B8]">
+                <span>Net Profit / Loss ($)</span>
+                <span
+                  className={`font-semibold ${
+                    netProfitUsd >= 0 ? "text-[#10B981]" : "text-[#F43F5E]"
+                  }`}
+                >
+                  {netProfitUsd >= 0 ? "+" : ""}${netProfitUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-[#94A3B8]">
+                <span>Return Kumulatif (%)</span>
+                <span
+                  className={`font-semibold ${
+                    netReturn >= 0 ? "text-[#10B981]" : "text-[#F43F5E]"
+                  }`}
+                >
+                  {netReturn >= 0 ? "+" : ""}{netReturn.toFixed(2)}%
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-[#94A3B8]">
+                <span>Total Trade Dieksekusi</span>
+                <span className="text-[#F8FAFC]">{simulationTrades.length} Trade ({winRate.toFixed(1)}% WR)</span>
+              </div>
+            </div>
+
+            {/* Quick Action Button */}
+            <div className="mt-4 space-y-2">
+              {(isLiquidated || currentBalance <= 0) && (
+                <button
+                  onClick={() => {
+                    const refill = dummyCapital > 0 ? dummyCapital : 10000;
+                    setCurrentBalance(refill);
+                    setIsLiquidated(false);
+                    setReplayAlert(`💰 Modal dummy berhasil diisi ulang menjadi $${refill.toLocaleString()}!`);
+                  }}
+                  className="w-full rounded border border-[#10B981] bg-[#10B981] py-2 font-mono text-xs font-bold text-[#090A0F] hover:bg-[#10B981]/90 active:scale-98 transition shadow-[0_0_12px_rgba(16,185,129,0.3)]"
+                >
+                  💰 ISI ULANG MODAL DUMMY (${dummyCapital.toLocaleString()})
+                </button>
+              )}
+              <button
+                onClick={handleStepForward}
+                disabled={isLiquidated || currentBalance <= 0}
+                className="w-full rounded border border-[#10B981] bg-[#10B981]/15 py-2 font-mono text-xs font-bold text-[#10B981] transition hover:bg-[#10B981]/25 active:scale-98 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                ⏩ ADVANCE NEXT REPLAY CANDLE
+              </button>
+              <button
+                onClick={handleRunFullBacktest}
+                className="w-full rounded border border-[#38BDF8]/60 bg-[#38BDF8]/15 py-2 font-mono text-xs font-bold text-[#38BDF8] transition hover:bg-[#38BDF8]/25 active:scale-98"
+              >
+                ⚡ RUN INSTANT FULL BACKTEST
+              </button>
+            </div>
+          </div>
+
+          {/* B. Confluence Score Gauge Card */}
           <div className="rounded border border-[#1F2430] bg-[#0E1118] p-5">
             <div className="flex items-center justify-between">
               <span className="font-mono text-xs font-semibold text-[#8E9BAE]">
@@ -1485,7 +2179,162 @@ export default function TerminalHome() {
             </div>
           </div>
 
-          {/* D. Dynamic Backtest Metrics Card (Updates with Replay Simulation) */}
+          {/* D. Parallel Channel Regime & Signals Card (Bounce & Break-Retest) */}
+          <div className="rounded border border-[#1F2430] bg-[#0E1118] p-5">
+            <div className="flex items-center justify-between border-b border-[#1F2430] pb-2.5">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-4 w-4 text-[#38BDF8]" />
+                <h3 className="font-mono text-xs font-bold tracking-wider text-[#F8FAFC]">
+                  PARALEL KANAL REGIME &amp; SIGNALS
+                </h3>
+              </div>
+              <div className="flex items-center gap-2">
+                {!settings.enableParallelChannel && (
+                  <span className="rounded bg-[#F43F5E]/15 border border-[#F43F5E]/40 px-2 py-0.5 font-mono text-[9px] font-bold text-[#F43F5E]">
+                    NON-AKTIF
+                  </span>
+                )}
+                {activeChannel ? (
+                  <span
+                    className={`rounded px-2 py-0.5 font-mono text-[10px] font-bold ${
+                      activeChannel.slope_type === "ASCENDING"
+                        ? "bg-[#10B981]/15 text-[#10B981] border border-[#10B981]/30"
+                        : activeChannel.slope_type === "DESCENDING"
+                        ? "bg-[#F43F5E]/15 text-[#F43F5E] border border-[#F43F5E]/30"
+                        : "bg-[#38BDF8]/15 text-[#38BDF8] border border-[#38BDF8]/30"
+                    }`}
+                  >
+                    {activeChannel.slope_type}
+                  </span>
+                ) : (
+                  <span className="font-mono text-[10px] text-[#64748B]">MENGHITUNG...</span>
+                )}
+              </div>
+            </div>
+
+            {/* Inactive Schema Notice if unchecked */}
+            {!settings.enableParallelChannel && (
+              <div className="mt-3 rounded border border-[#F43F5E]/30 bg-[#2A0E17] p-2.5 font-mono text-[11px] text-[#FDA4AF] flex items-center justify-between gap-2">
+                <span>Skema Paralel Kanal saat ini dinonaktifkan di checklist simulasi.</span>
+                <button
+                  type="button"
+                  onClick={() => setSettings((prev) => ({ ...prev, enableParallelChannel: true }))}
+                  className="rounded bg-[#38BDF8] px-2 py-1 text-[10px] font-bold text-[#090A0F] hover:bg-[#38BDF8]/90 transition shrink-0"
+                >
+                  AKTIFKAN SEKARANG
+                </button>
+              </div>
+            )}
+
+            {activeChannel ? (
+              <div className="mt-3 space-y-3 font-mono text-xs">
+                {/* Channel Envelopes */}
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded border border-[#1F2430] bg-[#121622] p-2">
+                    <span className="text-[10px] text-[#64748B] block">RESISTANCE (UPPER)</span>
+                    <strong className="text-[#38BDF8] font-bold text-[11px]">
+                      ${activeChannel.upper_price < 1 ? activeChannel.upper_price.toFixed(6) : activeChannel.upper_price.toFixed(2)}
+                    </strong>
+                  </div>
+                  <div className="rounded border border-[#1F2430] bg-[#121622] p-2">
+                    <span className="text-[10px] text-[#64748B] block">MIDLINE (50%)</span>
+                    <strong className="text-[#94A3B8] font-bold text-[11px]">
+                      ${activeChannel.mid_price < 1 ? activeChannel.mid_price.toFixed(6) : activeChannel.mid_price.toFixed(2)}
+                    </strong>
+                  </div>
+                  <div className="rounded border border-[#1F2430] bg-[#121622] p-2">
+                    <span className="text-[10px] text-[#64748B] block">SUPPORT (LOWER)</span>
+                    <strong className="text-[#38BDF8] font-bold text-[11px]">
+                      ${activeChannel.lower_price < 1 ? activeChannel.lower_price.toFixed(6) : activeChannel.lower_price.toFixed(2)}
+                    </strong>
+                  </div>
+                </div>
+
+                {/* Channel Anchor Geometry & Swing High / Low Details */}
+                <div className="rounded border border-[#1F2430] bg-[#121622] p-2.5 space-y-1.5 text-[11px]">
+                  <div className="flex items-center justify-between text-[#94A3B8]">
+                    <span>Metode Patokan:</span>
+                    <span className="font-bold text-[#38BDF8]">
+                      {activeChannel.anchor_mode === "SWING_HIGHLOW"
+                        ? "🎯 Swing High & Swing Low (Extremes)"
+                        : "📈 Linier Regresi (Ordinary Least Squares)"}
+                    </span>
+                  </div>
+
+                  {activeChannel.anchor_high && (
+                    <div className="flex items-center justify-between text-[#94A3B8]">
+                      <span>Patokan Swing High:</span>
+                      <strong className="text-[#F8FAFC]">
+                        ${activeChannel.anchor_high.price < 1 ? activeChannel.anchor_high.price.toFixed(6) : activeChannel.anchor_high.price.toFixed(2)}{" "}
+                        <span className="text-[10px] text-[#64748B]">(Bar #{activeChannel.anchor_high.index})</span>
+                      </strong>
+                    </div>
+                  )}
+
+                  {activeChannel.anchor_low && (
+                    <div className="flex items-center justify-between text-[#94A3B8]">
+                      <span>Patokan Swing Low:</span>
+                      <strong className="text-[#F8FAFC]">
+                        ${activeChannel.anchor_low.price < 1 ? activeChannel.anchor_low.price.toFixed(6) : activeChannel.anchor_low.price.toFixed(2)}{" "}
+                        <span className="text-[10px] text-[#64748B]">(Bar #{activeChannel.anchor_low.index})</span>
+                      </strong>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between border-t border-[#1F2430]/70 pt-1.5 text-[#94A3B8]">
+                    <span>
+                      Tinggi Kanal (H):{" "}
+                      <strong className="text-white">
+                        ${activeChannel.channel_height < 1 ? activeChannel.channel_height.toFixed(4) : activeChannel.channel_height.toFixed(2)}
+                      </strong>
+                    </span>
+                    <span>
+                      Slope:{" "}
+                      <strong className="text-white">
+                        {activeChannel.slope >= 0 ? "+" : ""}
+                        {activeChannel.slope.toFixed(4)}
+                      </strong>
+                    </span>
+                    <span>
+                      Fit R²:{" "}
+                      <strong className="text-[#10B981]">
+                        {(activeChannel.r_squared * 100).toFixed(1)}%
+                      </strong>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Dual Setup Rule Matrix */}
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between rounded bg-[#121622] px-2.5 py-1.5 border border-[#1F2430]">
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[#10B981]"></span>
+                      <span className="text-[#E2E8F0] font-semibold text-[10px]">1. Mantul (Bounce)</span>
+                    </div>
+                    <span className="text-[10px] text-[#94A3B8]">
+                      Close di dalam batas -&gt; Reversal ke Mid/Batas Lawan
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between rounded bg-[#121622] px-2.5 py-1.5 border border-[#1F2430]">
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[#38BDF8]"></span>
+                      <span className="text-[#E2E8F0] font-semibold text-[10px]">2. Break &amp; Retest</span>
+                    </div>
+                    <span className="text-[10px] text-[#94A3B8]">
+                      Break &amp; Retest -&gt; Garis jadi Support/Supply Baru
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="py-4 text-center text-[#64748B] text-xs font-mono">
+                Membutuhkan minimal 15 candle histori untuk kalkulasi kanal.
+              </div>
+            )}
+          </div>
+
+          {/* E. Dynamic Backtest Metrics Card (Updates with Replay Simulation) */}
           <div className="rounded border border-[#1F2430] bg-[#0E1118] p-5">
             <div className="flex items-center justify-between">
               <span className="font-mono text-xs font-semibold text-[#8E9BAE]">

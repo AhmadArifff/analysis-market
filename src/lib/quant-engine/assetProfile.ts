@@ -46,11 +46,11 @@ const FOREX_PROFILE: AssetProfile = {
   category: "FOREX",
   label: "Forex (XAUUSD, Pairs)",
 
-  minWickRatio: 0.32,
-  minRvol: 1.5,
+  minWickRatio: 0.25,
+  minRvol: 1.2,
 
   emaPeriods: [21, 50],
-  adxThreshold: 22,
+  adxThreshold: 20,
   adxPeriod: 14,
 
   rsiOverbought: 75,
@@ -75,18 +75,18 @@ const FOREX_PROFILE: AssetProfile = {
     structureShift: 10,
     volumeConfirm: 10,
   },
-  confluenceMinScore: 75,
+  confluenceMinScore: 60,
 };
 
 const CRYPTO_MAJOR_PROFILE: AssetProfile = {
   category: "CRYPTO_MAJOR",
   label: "Crypto Major (BTC, ETH, BNB, SOL)",
 
-  minWickRatio: 0.25,
-  minRvol: 1.8,
+  minWickRatio: 0.22,
+  minRvol: 1.3,
 
   emaPeriods: [21, 50],
-  adxThreshold: 20,
+  adxThreshold: 18,
   adxPeriod: 14,
 
   rsiOverbought: 78,
@@ -96,8 +96,8 @@ const CRYPTO_MAJOR_PROFILE: AssetProfile = {
   killzoneHoursUTC: null,
 
   atrSlMultiplier: 1.5,
-  riskRewardMin: 2.0,
-  riskRewardTarget: 3.0,
+  riskRewardMin: 1.8,
+  riskRewardTarget: 2.5,
   maxSpreadAtrRatio: 0.08,
 
   confluenceWeights: {
@@ -108,18 +108,18 @@ const CRYPTO_MAJOR_PROFILE: AssetProfile = {
     structureShift: 15,
     volumeConfirm: 15,
   },
-  confluenceMinScore: 78,
+  confluenceMinScore: 60,
 };
 
 const CRYPTO_MEME_PROFILE: AssetProfile = {
   category: "CRYPTO_MEME",
   label: "Crypto Meme (DOGE, PEPE, Trending)",
 
-  minWickRatio: 0.22,
-  minRvol: 2.5,
+  minWickRatio: 0.20,
+  minRvol: 1.6,
 
   emaPeriods: [9, 21],
-  adxThreshold: 25,
+  adxThreshold: 22,
   adxPeriod: 14,
 
   rsiOverbought: 82,
@@ -128,9 +128,9 @@ const CRYPTO_MEME_PROFILE: AssetProfile = {
 
   killzoneHoursUTC: null,
 
-  atrSlMultiplier: 2.0,
-  riskRewardMin: 2.5,
-  riskRewardTarget: 4.0,
+  atrSlMultiplier: 1.8,
+  riskRewardMin: 2.0,
+  riskRewardTarget: 3.0,
   maxSpreadAtrRatio: 0.12,
 
   confluenceWeights: {
@@ -141,7 +141,7 @@ const CRYPTO_MEME_PROFILE: AssetProfile = {
     structureShift: 20,
     volumeConfirm: 30,
   },
-  confluenceMinScore: 82,
+  confluenceMinScore: 65,
 };
 
 const SYMBOL_CATEGORY_MAP: Record<string, AssetCategory> = {
@@ -232,9 +232,16 @@ export function isWithinKillzone(
 ): boolean {
   if (!killzones || killzones.length === 0) return true;
 
-  const date = new Date(
-    typeof candleTime === "number" ? candleTime * 1000 : candleTime
-  );
+  const ts =
+    typeof candleTime === "number"
+      ? candleTime > 1e11
+        ? candleTime
+        : candleTime * 1000
+      : new Date(candleTime).getTime();
+
+  if (isNaN(ts)) return true;
+
+  const date = new Date(ts);
   const hourUTC = date.getUTCHours();
 
   return killzones.some(([start, end]) => {
