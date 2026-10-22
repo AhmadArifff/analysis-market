@@ -16,6 +16,8 @@ export interface TradeRecord {
   pnl_pct: number;
   result: "WIN" | "LOSS";
   notes?: string;
+  trigger_category?: string;
+  trigger_reason?: string;
 }
 
 export interface KpiSummary {
@@ -87,6 +89,8 @@ export async function generateExcelJournal(
     { header: "ASSET", key: "asset", width: 14 },
     { header: "TIMEFRAME", key: "timeframe", width: 12 },
     { header: "DIRECTION", key: "side", width: 12 },
+    { header: "TRIGGER SCHEME", key: "trigger_category", width: 22 },
+    { header: "TRIGGER REASONING / CONFIG", key: "trigger_reason", width: 44 },
     { header: "ENTRY TIME", key: "entry_time", width: 20 },
     { header: "ENTRY PRICE", key: "entry_px", width: 16 },
     { header: "STOP LOSS", key: "sl_px", width: 16 },
@@ -118,6 +122,8 @@ export async function generateExcelJournal(
 
     const row = sheetJournal.addRow({
       ...trade,
+      trigger_category: trade.trigger_category || trade.setup_type || "-",
+      trigger_reason: trade.trigger_reason || trade.notes || "Kriteria konfluensi terpenuhi",
       entry_time: formatTime(trade.entry_time),
       exit_time: formatTime(trade.exit_time),
     });

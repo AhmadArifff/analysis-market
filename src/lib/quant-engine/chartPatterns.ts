@@ -272,6 +272,11 @@ export function getDefaultEnabledPatterns(): Record<ChartPatternId, boolean> {
   return defaults as Record<ChartPatternId, boolean>;
 }
 
+export interface DetectChartPatternsOptions {
+  enableDoubleTopBottom?: boolean;
+  doubleTopBottomTolerance?: number; // e.g. 0.015 (1.5%)
+}
+
 /**
  * Algoritma Deteksi Geometris Pola Chart
  */
@@ -279,7 +284,8 @@ export function detectChartPatterns(
   candles: CandleData[],
   currentIndex: number,
   currentATR: number,
-  enabledPatterns?: Record<ChartPatternId, boolean>
+  enabledPatterns?: Record<ChartPatternId, boolean>,
+  options?: DetectChartPatternsOptions
 ): DetectedChartPattern | null {
   if (currentIndex < 12 || candles.length < 12) return null;
 
@@ -287,6 +293,9 @@ export function detectChartPatterns(
     if (!enabledPatterns) return true;
     return enabledPatterns[id] !== false;
   };
+
+  const isDoubleTopBottomAllowed = options?.enableDoubleTopBottom !== false;
+  const dblTol = options?.doubleTopBottomTolerance ?? 0.015;
 
   const windowSize = Math.min(30, currentIndex + 1);
   const windowCandles = candles.slice(currentIndex - windowSize + 1, currentIndex + 1);
@@ -319,7 +328,7 @@ export function detectChartPatterns(
   // ========================================================
   // 1. DETEKSI DOUBLE TOP ("M")
   // ========================================================
-  if (isPatternActive("BEARISH_DOUBLE_TOP") && highs.length >= 2 && lows.length >= 1) {
+  if (isDoubleTopBottomAllowed && isPatternActive("BEARISH_DOUBLE_TOP") && highs.length >= 2 && lows.length >= 1) {
     const h1 = highs[highs.length - 2];
     const h2 = highs[highs.length - 1];
     const middleLows = lows.filter((l) => l.index > h1.index && l.index < h2.index);
@@ -328,8 +337,8 @@ export function detectChartPatterns(
       const necklineLow = middleLows[0];
       const diffPct = Math.abs(h1.price - h2.price) / h1.price;
 
-      // Dua puncak sejajar dalam deviasi 0.8%
-      if (diffPct <= 0.008 && necklineLow.price < Math.min(h1.price, h2.price) - currentATR * 0.8) {
+      // Dua puncak sejajar dalam deviasi dblTol
+      if (diffPct <= dblTol && necklineLow.price < Math.min(h1.price, h2.price) - currentATR * 0.8) {
         const height = Math.min(h1.price, h2.price) - necklineLow.price;
         const isBreakout = currentBar.close < necklineLow.price;
 
@@ -347,7 +356,7 @@ export function detectChartPatterns(
             bar_start_idx: h1.index,
             bar_end_idx: currentIndex,
             status: isBreakout ? "CONFIRMED_BREAKOUT" : "FORMING",
-            notes: `Dua puncak sejajar di $${h1.price.toFixed(2)} & $${h2.price.toFixed(2)} dengan neckline $${necklineLow.price.toFixed(2)}.`,
+            notes: `Dua puncak sejajar di $${h1.price.toFixed(2)} & $${h2.price.toFixed(2)} (Selisih ${(diffPct * 100).toFixed(2)}% ≤ ${(dblTol * 100).toFixed(1)}%) dengan neckline $${necklineLow.price.toFixed(2)}.`,
           };
         }
       }
@@ -357,7 +366,7 @@ export function detectChartPatterns(
   // ========================================================
   // 2. DETEKSI DOUBLE BOTTOM ("W")
   // ========================================================
-  if (isPatternActive("BULLISH_DOUBLE_BOTTOM") && lows.length >= 2 && highs.length >= 1) {
+  if (isDoubleTopBottomAllowed && isPatternActive("BULLISH_DOUBLE_BOTTOM") && lows.length >= 2 && highs.length >= 1) {
     const l1 = lows[lows.length - 2];
     const l2 = lows[lows.length - 1];
     const middleHighs = highs.filter((h) => h.index > l1.index && h.index < l2.index);
@@ -366,7 +375,7 @@ export function detectChartPatterns(
       const necklineHigh = middleHighs[0];
       const diffPct = Math.abs(l1.price - l2.price) / l1.price;
 
-      if (diffPct <= 0.008 && necklineHigh.price > Math.max(l1.price, l2.price) + currentATR * 0.8) {
+      if (diffPct <= dblTol && necklineHigh.price > Math.max(l1.price, l2.price) + currentATR * 0.8) {
         const height = necklineHigh.price - Math.max(l1.price, l2.price);
         const isBreakout = currentBar.close > necklineHigh.price;
 
@@ -384,7 +393,7 @@ export function detectChartPatterns(
             bar_start_idx: l1.index,
             bar_end_idx: currentIndex,
             status: isBreakout ? "CONFIRMED_BREAKOUT" : "FORMING",
-            notes: `Dua lembah sejajar di $${l1.price.toFixed(2)} & $${l2.price.toFixed(2)} dengan neckline $${necklineHigh.price.toFixed(2)}.`,
+            notes: `Dua lembah sejajar di $${l1.price.toFixed(2)} & $${l2.price.toFixed(2)} (Selisih ${(diffPct * 100).toFixed(2)}% ≤ ${(dblTol * 100).toFixed(1)}%) dengan neckline $${necklineHigh.price.toFixed(2)}.`,
           };
         }
       }

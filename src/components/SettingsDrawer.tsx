@@ -44,6 +44,8 @@ export interface StrategySettings {
   enableTrendFilter: boolean; // 5. Macro Trend Alignment (EMA 21/50 + ADX 14)
   enableVolumeFilter: boolean; // 6. Relative Volume Spikes (RVOL >= 1.5x + CVD)
   enableTrendRunner: boolean; // 7. Trend Runner / Liquidity Void Continuation (No-Sweep Flow)
+  enableDoubleTopBottom: boolean; // 8. Skema Double Top & Double Bottom (M & W Reversals)
+  doubleTopBottomTolerance: number; // Toleransi deviasi puncak/lembah (misal: 1.5%)
 
   // 20 Pola Karakteristik Chart Klasik Toggles
   enablePatternTrades: boolean; // Master toggle eksekusi breakout pola chart
@@ -76,6 +78,8 @@ export const DEFAULT_SETTINGS: StrategySettings = {
   enableTrendFilter: true,
   enableVolumeFilter: true,
   enableTrendRunner: true,
+  enableDoubleTopBottom: true,
+  doubleTopBottomTolerance: 1.5,
 
   enablePatternTrades: true,
   enabledPatterns: getDefaultEnabledPatterns(),
@@ -462,8 +466,54 @@ export default function SettingsDrawer({
                       className="h-4 w-4 accent-[#14B8A6] mt-0.5 cursor-pointer"
                     />
                   </label>
+
+                  {/* 8. Double Top & Double Bottom Reversals */}
+                  <label className="flex items-start justify-between gap-3 p-2 rounded border border-[#1F2430] hover:border-[#EC4899]/50 cursor-pointer transition bg-[#0E1118]">
+                    <div>
+                      <div className="font-semibold text-[#E2E8F0] flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-[#EC4899]"></span>
+                        8. Skema Double Top &amp; Double Bottom (Pola Pembalikan M &amp; W)
+                      </div>
+                      <div className="text-[10px] text-[#64748B]">
+                        Deteksi dua puncak sejajar (Double Top &apos;M&apos;) untuk Breakdown Sell &amp; dua lembah sejajar (Double Bottom &apos;W&apos;) untuk Breakout Buy
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={form.enableDoubleTopBottom}
+                      onChange={(e) => handleChange("enableDoubleTopBottom", e.target.checked)}
+                      className="h-4 w-4 accent-[#EC4899] mt-0.5 cursor-pointer"
+                    />
+                  </label>
                 </div>
               </div>
+
+              {/* PENGATURAN PARAMETER DOUBLE TOP & BOTTOM */}
+              {form.enableDoubleTopBottom && (
+                <div className="rounded border border-[#1F2430] bg-[#121622] p-3.5 space-y-3">
+                  <div className="border-b border-[#1F2430] pb-2">
+                    <div className="font-bold text-[#EC4899] text-xs">PENGATURAN SKEMA DOUBLE TOP &amp; BOTTOM (M &amp; W)</div>
+                    <div className="text-[10px] text-[#8E9BAE]">
+                      Toleransi selisih ketinggian puncak/lembah untuk validitas pola geometris
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[#8E9BAE] block mb-1">TOLERANSI DEVIASI PUNCAK / LEMBAH (%)</label>
+                    <input
+                      type="number"
+                      min={0.2}
+                      max={5.0}
+                      step={0.1}
+                      value={form.doubleTopBottomTolerance}
+                      onChange={(e) => handleChange("doubleTopBottomTolerance", parseFloat(e.target.value) || 1.5)}
+                      className="w-full rounded border border-[#1F2430] bg-[#0E1118] px-3 py-2 text-[#F8FAFC] focus:border-[#EC4899] focus:outline-none"
+                    />
+                    <span className="text-[10px] text-[#64748B] mt-1 block">
+                      Maksimal selisih persentase antara Puncak 1 dan Puncak 2 (Default: 1.5%).
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* 2. PENGATURAN KANAL PARALEL & PATOKAN SWING */}
               <div className="rounded border border-[#1F2430] bg-[#121622] p-3.5 space-y-3">

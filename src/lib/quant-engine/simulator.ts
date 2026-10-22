@@ -34,6 +34,13 @@ import {
 
 export type TradeDirectionFilter = "AUTO" | "LONG" | "SHORT" | "ALL";
 
+export type TriggerCategory =
+  | "LIQUIDITY_SWEEP"
+  | "DOUBLE_TOP_BOTTOM"
+  | "PARALLEL_CHANNEL"
+  | "TREND_RUNNER"
+  | "CHART_PATTERN";
+
 export interface ActivePosition {
   trade_id: number;
   symbol: string;
@@ -47,6 +54,8 @@ export interface ActivePosition {
   swept_pool_price: number;
   setup_type: string;
   lot_size?: number;
+  trigger_category?: TriggerCategory;
+  trigger_reason?: string;
 }
 
 export interface ReplayTrade {
@@ -68,6 +77,8 @@ export interface ReplayTrade {
   balance_after?: number;
   result: "WIN" | "LOSS";
   notes: string;
+  trigger_category?: TriggerCategory;
+  trigger_reason?: string;
 }
 
 export interface SimulationStepResult {
@@ -139,6 +150,8 @@ export interface StrategySchemaConfig {
   enableTrendFilter?: boolean;
   enableVolumeFilter?: boolean;
   enableTrendRunner?: boolean;
+  enableDoubleTopBottom?: boolean; // Dedicated Double Top & Double Bottom Reversal Schema
+  doubleTopBottomTolerance?: number; // Peak difference tolerance (default: 0.015)
   enablePatternTrades?: boolean;
   enabledPatterns?: Record<ChartPatternId, boolean>;
   channelLookback?: number;
@@ -174,6 +187,8 @@ export function stepReplaySimulation(
           enableTrendFilter: true,
           enableVolumeFilter: true,
           enableTrendRunner: true,
+          enableDoubleTopBottom: true,
+          doubleTopBottomTolerance: 0.015,
           enablePatternTrades: true,
           enabledPatterns: getDefaultEnabledPatterns(),
           channelAnchorMode: "SWING_HIGHLOW",
@@ -186,6 +201,8 @@ export function stepReplaySimulation(
   const enableTrendFilter = schema.enableTrendFilter ?? true;
   const enableVolumeFilter = schema.enableVolumeFilter ?? true;
   const enableTrendRunner = schema.enableTrendRunner ?? true;
+  const enableDoubleTopBottom = schema.enableDoubleTopBottom ?? true;
+  const doubleTopBottomTolerance = schema.doubleTopBottomTolerance ?? 0.015;
   const enablePatternTrades = schema.enablePatternTrades ?? true;
   const effectiveChannelLookback = schema.channelLookback ?? 25;
   const channelAnchorMode = schema.channelAnchorMode ?? "SWING_HIGHLOW";
@@ -485,6 +502,8 @@ export function stepReplaySimulation(
           // TP targets opposing fractal high if it offers >= effectiveRR, otherwise standard RR target
           const finalTP = lastHigh && lastHigh.price >= minTarget ? lastHigh.price : minTarget;
 
+          const triggerReasonLong = `Sweep Buy SL @ $${buySweepLevel} (Lower Wick ${(lowerWickRatio * 100).toFixed(1)}% ≥ ${(effectiveWickRatio * 100).toFixed(0)}%) + ADX ${round2(currentADX)}${fvgMatch ? " + FVG Imbalance" : ""}${enableTrendFilter ? (isUptrend ? " + Trend Dip" : " + Counter-Exhaustion") : ""}`;
+
           activePos = {
             trade_id: Date.now() + Math.floor(Math.random() * 1000),
             symbol,
@@ -500,6 +519,8 @@ export function stepReplaySimulation(
               ? `TREND_DIP_BUY [${profile.category}]`
               : `COUNTER_EXHAUSTION_BUY [${profile.category}]`,
             lot_size: lotSize,
+            trigger_category: "LIQUIDITY_SWEEP",
+            trigger_reason: triggerReasonLong,
           };
 
           const pool = activePools.find((p) => p.pool_type === "BUY_SL");
@@ -550,6 +571,8 @@ export function stepReplaySimulation(
           // TP targets opposing fractal low if it offers >= effectiveRR, otherwise standard RR target
           const finalTP = lastLow && lastLow.price <= minTarget ? lastLow.price : minTarget;
 
+          const triggerReasonShort = `Sweep Sell SL @ $${sellSweepLevel} (Upper Wick ${(upperWickRatio * 100).toFixed(1)}% ≥ ${(effectiveWickRatio * 100).toFixed(0)}%) + ADX ${round2(currentADX)}${fvgMatch ? " + FVG Imbalance" : ""}${enableTrendFilter ? (!isUptrend ? " + Trend Rally" : " + Counter-Exhaustion") : ""}`;
+
           activePos = {
             trade_id: Date.now() + Math.floor(Math.random() * 1000),
             symbol,
@@ -565,6 +588,8 @@ export function stepReplaySimulation(
               ? `TREND_RALLY_SELL [${profile.category}]`
               : `COUNTER_EXHAUSTION_SELL [${profile.category}]`,
             lot_size: lotSize,
+            trigger_category: "LIQUIDITY_SWEEP",
+            trigger_reason: triggerReasonShort,
           };
 
           const pool = activePools.find((p) => p.pool_type === "SELL_SL");
@@ -595,6 +620,9 @@ export function stepReplaySimulation(
     if (enableParallelChannel && !activePos && channelSignal !== "NONE") {
       let allowChannelTrade = false;
 
+      const slopeStr = channelEval.channel ? (channelEval.channel.slope > 0 ? "+" : "") + channelEval.channel.slope.toFixed(4) : "0";
+      const triggerReasonChannel = `${channelEval.setup_type} @ $${channelEval.entry_px} (Kanal Slope: ${slopeStr} | ${channelEval.notes})`;
+
       if (channelSignal === "CHANNEL_BOUNCE_BUY" || channelSignal === "CHANNEL_BREAK_RETEST_BUY") {
         if (directionFilter === "LONG" || directionFilter === "ALL") {
           allowChannelTrade = true;
@@ -616,6 +644,8 @@ export function stepReplaySimulation(
             swept_pool_price: channelEval.channel?.lower_price || currentBar.close,
             setup_type: channelEval.setup_type,
             lot_size: lotSize,
+            trigger_category: "PARALLEL_CHANNEL",
+            trigger_reason: triggerReasonChannel,
           };
 
           alertMessage = `PARALLEL CHANNEL ENTRY! ${channelEval.setup_type} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ${channelEval.notes}`;
@@ -641,6 +671,8 @@ export function stepReplaySimulation(
             swept_pool_price: channelEval.channel?.upper_price || currentBar.close,
             setup_type: channelEval.setup_type,
             lot_size: lotSize,
+            trigger_category: "PARALLEL_CHANNEL",
+            trigger_reason: triggerReasonChannel,
           };
 
           alertMessage = `PARALLEL CHANNEL ENTRY! ${channelEval.setup_type} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ${channelEval.notes}`;
@@ -675,6 +707,8 @@ export function stepReplaySimulation(
       }
 
       if (allowRunner) {
+        const triggerReasonRunner = `Trend Runner Continuation: ${runnerSignal.setup_type} (ADX: ${round2(currentADX)} | ${runnerSignal.notes})`;
+
         activePos = {
           trade_id: Date.now() + Math.floor(Math.random() * 1000),
           symbol,
@@ -688,6 +722,8 @@ export function stepReplaySimulation(
           swept_pool_price: runnerSignal.side === "LONG" ? (lastLow?.price || currentBar.close) : (lastHigh?.price || currentBar.close),
           setup_type: runnerSignal.setup_type,
           lot_size: lotSize,
+          trigger_category: "TREND_RUNNER",
+          trigger_reason: triggerReasonRunner,
         };
 
         alertMessage = `🏃 TREND RUNNER ENTRY! ${runnerSignal.setup_type} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ${runnerSignal.notes}`;
@@ -695,41 +731,74 @@ export function stepReplaySimulation(
     }
   }
 
-  // 7. Detect Chart Patterns (20 Classical Formations) & Breakout Execution
-  const detectedPattern = enablePatternTrades
+  // 7. Detect Chart Patterns (20 Classical Formations) & Double Top / Double Bottom Breakout Execution
+  const shouldDetectPatterns = enablePatternTrades || enableDoubleTopBottom;
+  const detectedPattern = shouldDetectPatterns
     ? detectChartPatterns(
         allCandles,
         currentIndex,
         currentATR,
-        schema.enabledPatterns
+        schema.enabledPatterns,
+        {
+          enableDoubleTopBottom,
+          doubleTopBottomTolerance,
+        }
       )
     : null;
 
-  if (enablePatternTrades && !activePos && detectedPattern && detectedPattern.status === "CONFIRMED_BREAKOUT") {
-    let allowPattern = false;
-    if (detectedPattern.bias === "BULLISH") {
-      allowPattern = directionFilter === "LONG" || directionFilter === "ALL" || directionFilter === "AUTO";
-    } else if (detectedPattern.bias === "BEARISH") {
-      allowPattern = directionFilter === "SHORT" || directionFilter === "ALL" || directionFilter === "AUTO";
-    }
+  if (shouldDetectPatterns && !activePos && detectedPattern && detectedPattern.status === "CONFIRMED_BREAKOUT") {
+    const isDoubleTopBottom =
+      detectedPattern.id === "BEARISH_DOUBLE_TOP" ||
+      detectedPattern.id === "BULLISH_DOUBLE_BOTTOM";
 
-    if (allowPattern) {
-      activePos = {
-        trade_id: Date.now() + Math.floor(Math.random() * 1000),
-        symbol,
-        side: detectedPattern.bias === "BULLISH" ? "LONG" : "SHORT",
-        entry_time: currentBar.time,
-        entry_index: currentIndex,
-        entry_px: fmtPrice(currentBar.close),
-        sl_px: fmtPrice(detectedPattern.stop_loss),
-        tp_px: fmtPrice(detectedPattern.target_price),
-        confluence_score: detectedPattern.confidence,
-        swept_pool_price: detectedPattern.neckline,
-        setup_type: `PATTERN_${detectedPattern.id}`,
-        lot_size: lotSize,
-      };
+    const isAllowedByConfig = isDoubleTopBottom
+      ? enableDoubleTopBottom
+      : enablePatternTrades;
 
-      alertMessage = `📐 POLA CHART BREAKOUT! ${detectedPattern.name} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ${detectedPattern.notes}`;
+    if (isAllowedByConfig) {
+      let allowPattern = false;
+      if (detectedPattern.bias === "BULLISH") {
+        allowPattern = directionFilter === "LONG" || directionFilter === "ALL" || directionFilter === "AUTO";
+      } else if (detectedPattern.bias === "BEARISH") {
+        allowPattern = directionFilter === "SHORT" || directionFilter === "ALL" || directionFilter === "AUTO";
+      }
+
+      if (allowPattern) {
+        const triggerCategory: TriggerCategory = isDoubleTopBottom
+          ? "DOUBLE_TOP_BOTTOM"
+          : "CHART_PATTERN";
+
+        const setupType = isDoubleTopBottom
+          ? (detectedPattern.id === "BEARISH_DOUBLE_TOP" ? "DOUBLE_TOP_M_BREAKOUT" : "DOUBLE_BOTTOM_W_BREAKOUT")
+          : `PATTERN_${detectedPattern.id}`;
+
+        const triggerReasonPattern = isDoubleTopBottom
+          ? (detectedPattern.id === "BEARISH_DOUBLE_TOP"
+              ? `Double Top (M) Reversal: Breakdown Neckline $${detectedPattern.neckline.toFixed(2)} | Target: $${detectedPattern.target_price.toFixed(2)} | ${detectedPattern.notes}`
+              : `Double Bottom (W) Reversal: Breakout Neckline $${detectedPattern.neckline.toFixed(2)} | Target: $${detectedPattern.target_price.toFixed(2)} | ${detectedPattern.notes}`)
+          : `${detectedPattern.name} (${detectedPattern.category}) Breakout: Neckline $${detectedPattern.neckline.toFixed(2)} | Target: $${detectedPattern.target_price.toFixed(2)} | ${detectedPattern.notes}`;
+
+        activePos = {
+          trade_id: Date.now() + Math.floor(Math.random() * 1000),
+          symbol,
+          side: detectedPattern.bias === "BULLISH" ? "LONG" : "SHORT",
+          entry_time: currentBar.time,
+          entry_index: currentIndex,
+          entry_px: fmtPrice(currentBar.close),
+          sl_px: fmtPrice(detectedPattern.stop_loss),
+          tp_px: fmtPrice(detectedPattern.target_price),
+          confluence_score: detectedPattern.confidence,
+          swept_pool_price: detectedPattern.neckline,
+          setup_type: setupType,
+          lot_size: lotSize,
+          trigger_category: triggerCategory,
+          trigger_reason: triggerReasonPattern,
+        };
+
+        alertMessage = isDoubleTopBottom
+          ? `📐 POLA PEMBALIKAN ${detectedPattern.name.toUpperCase()}! @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ${detectedPattern.notes}`
+          : `📐 POLA CHART BREAKOUT! ${detectedPattern.name} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ${detectedPattern.notes}`;
+      }
     }
   }
 
@@ -919,6 +988,8 @@ function buildClosedTrade(
     notes: result === "WIN"
       ? `Take Profit hit @ $${exitPx} (+${pnlPct}%, +$${pnlUsd})`
       : `Stopped out @ $${exitPx} (${pnlPct}%, $${pnlUsd})`,
+    trigger_category: pos.trigger_category,
+    trigger_reason: pos.trigger_reason,
   };
 
   return {

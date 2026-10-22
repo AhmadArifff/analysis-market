@@ -308,6 +308,8 @@ export default function TerminalHome() {
     enableTrendFilter: settings.enableTrendFilter ?? true,
     enableVolumeFilter: settings.enableVolumeFilter ?? true,
     enableTrendRunner: settings.enableTrendRunner ?? true,
+    enableDoubleTopBottom: settings.enableDoubleTopBottom ?? true,
+    doubleTopBottomTolerance: (settings.doubleTopBottomTolerance || 1.5) / 100,
     enablePatternTrades: settings.enablePatternTrades ?? true,
     enabledPatterns: settings.enabledPatterns,
     channelLookback: settings.channelLookback ?? 25,
@@ -320,6 +322,8 @@ export default function TerminalHome() {
     settings.enableTrendFilter,
     settings.enableVolumeFilter,
     settings.enableTrendRunner,
+    settings.enableDoubleTopBottom,
+    settings.doubleTopBottomTolerance,
     settings.enablePatternTrades,
     settings.enabledPatterns,
     settings.channelLookback,
@@ -1659,6 +1663,36 @@ export default function TerminalHome() {
                       {Object.values(settings.enabledPatterns || {}).filter(Boolean).length}/20 📐
                     </button>
                   </div>
+
+                  {/* 9. Double Top & Double Bottom (M & W Reversals) */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        enableDoubleTopBottom: !prev.enableDoubleTopBottom,
+                      }))
+                    }
+                    className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-bold border transition ${
+                      settings.enableDoubleTopBottom
+                        ? "bg-[#EC4899]/15 border-[#EC4899]/50 text-[#F472B6]"
+                        : "bg-[#141824] border-[#1F2430] text-[#64748B] hover:text-[#94A3B8]"
+                    }`}
+                    title="Aktifkan/Nonaktifkan Skema Pembalikan Double Top (M) & Double Bottom (W)"
+                  >
+                    <span
+                      className={`flex h-3 w-3 items-center justify-center rounded-sm border ${
+                        settings.enableDoubleTopBottom
+                          ? "border-[#F472B6] bg-[#F472B6]"
+                          : "border-[#475569] bg-transparent"
+                      }`}
+                    >
+                      {settings.enableDoubleTopBottom && (
+                        <Check className="h-2.5 w-2.5 text-[#090A0F] stroke-[3]" />
+                      )}
+                    </span>
+                    <span>9. Double Top/Bottom (M&amp;W)</span>
+                  </button>
                 </div>
 
                 {/* Quick Channel Anchor Mode Selector & Full Settings Link */}
@@ -1858,6 +1892,7 @@ export default function TerminalHome() {
                     <th className="py-2">EXIT TIME</th>
                     <th className="py-2">SYMBOL</th>
                     <th className="py-2">SIDE</th>
+                    <th className="py-2">TRIGGER ENTRY / REASONING</th>
                     <th className="py-2 text-right">LOT</th>
                     <th className="py-2 text-right">ENTRY</th>
                     <th className="py-2 text-right">STOP LOSS</th>
@@ -1887,6 +1922,48 @@ export default function TerminalHome() {
                         >
                           {activePosition.side}
                         </span>
+                      </td>
+                      <td className="py-2.5 max-w-[280px]">
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {activePosition.trigger_category === "LIQUIDITY_SWEEP" && (
+                              <span className="inline-flex items-center gap-1 rounded bg-[#10B981]/15 px-1.5 py-0.5 text-[9px] font-bold text-[#10B981] border border-[#10B981]/30">
+                                <span>💧</span> LIQUIDITY SWEEP
+                              </span>
+                            )}
+                            {activePosition.trigger_category === "DOUBLE_TOP_BOTTOM" && (
+                              <span className="inline-flex items-center gap-1 rounded bg-[#EC4899]/15 px-1.5 py-0.5 text-[9px] font-bold text-[#F472B6] border border-[#EC4899]/30">
+                                <span>📐</span> {activePosition.side === "SHORT" ? "DOUBLE TOP (M)" : "DOUBLE BOTTOM (W)"}
+                              </span>
+                            )}
+                            {activePosition.trigger_category === "PARALLEL_CHANNEL" && (
+                              <span className="inline-flex items-center gap-1 rounded bg-[#38BDF8]/15 px-1.5 py-0.5 text-[9px] font-bold text-[#38BDF8] border border-[#38BDF8]/30">
+                                <span>📊</span> PARALLEL CHANNEL
+                              </span>
+                            )}
+                            {activePosition.trigger_category === "TREND_RUNNER" && (
+                              <span className="inline-flex items-center gap-1 rounded bg-[#14B8A6]/15 px-1.5 py-0.5 text-[9px] font-bold text-[#2DD4BF] border border-[#14B8A6]/30">
+                                <span>🏃</span> TREND RUNNER
+                              </span>
+                            )}
+                            {activePosition.trigger_category === "CHART_PATTERN" && (
+                              <span className="inline-flex items-center gap-1 rounded bg-[#8B5CF6]/15 px-1.5 py-0.5 text-[9px] font-bold text-[#A78BFA] border border-[#8B5CF6]/30">
+                                <span>📈</span> {activePosition.setup_type.replace("PATTERN_", "")}
+                              </span>
+                            )}
+                            {!activePosition.trigger_category && (
+                              <span className="inline-flex items-center gap-1 rounded bg-[#334155]/30 px-1.5 py-0.5 text-[9px] font-bold text-[#94A3B8]">
+                                {activePosition.setup_type || "SWEEP_ENTRY"}
+                              </span>
+                            )}
+                            <span className="font-mono text-[9px] text-[#38BDF8]">
+                              Score: {activePosition.confluence_score}/100
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-[#94A3B8] leading-tight truncate" title={activePosition.trigger_reason || activePosition.setup_type}>
+                            {activePosition.trigger_reason || activePosition.setup_type}
+                          </p>
+                        </div>
                       </td>
                       <td className="py-2.5 text-right font-mono text-[#38BDF8] font-semibold">
                         {activePosition.lot_size || dummyLotSize}
@@ -1942,6 +2019,48 @@ export default function TerminalHome() {
                           {t.side}
                         </span>
                       </td>
+                      <td className="py-2.5 max-w-[280px]">
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {t.trigger_category === "LIQUIDITY_SWEEP" && (
+                              <span className="inline-flex items-center gap-1 rounded bg-[#10B981]/15 px-1.5 py-0.5 text-[9px] font-bold text-[#10B981] border border-[#10B981]/30">
+                                <span>💧</span> LIQUIDITY SWEEP
+                              </span>
+                            )}
+                            {t.trigger_category === "DOUBLE_TOP_BOTTOM" && (
+                              <span className="inline-flex items-center gap-1 rounded bg-[#EC4899]/15 px-1.5 py-0.5 text-[9px] font-bold text-[#F472B6] border border-[#EC4899]/30">
+                                <span>📐</span> {t.side === "SHORT" ? "DOUBLE TOP (M)" : "DOUBLE BOTTOM (W)"}
+                              </span>
+                            )}
+                            {t.trigger_category === "PARALLEL_CHANNEL" && (
+                              <span className="inline-flex items-center gap-1 rounded bg-[#38BDF8]/15 px-1.5 py-0.5 text-[9px] font-bold text-[#38BDF8] border border-[#38BDF8]/30">
+                                <span>📊</span> PARALLEL CHANNEL
+                              </span>
+                            )}
+                            {t.trigger_category === "TREND_RUNNER" && (
+                              <span className="inline-flex items-center gap-1 rounded bg-[#14B8A6]/15 px-1.5 py-0.5 text-[9px] font-bold text-[#2DD4BF] border border-[#14B8A6]/30">
+                                <span>🏃</span> TREND RUNNER
+                              </span>
+                            )}
+                            {t.trigger_category === "CHART_PATTERN" && (
+                              <span className="inline-flex items-center gap-1 rounded bg-[#8B5CF6]/15 px-1.5 py-0.5 text-[9px] font-bold text-[#A78BFA] border border-[#8B5CF6]/30">
+                                <span>📈</span> {t.setup_type.replace("PATTERN_", "")}
+                              </span>
+                            )}
+                            {!t.trigger_category && (
+                              <span className="inline-flex items-center gap-1 rounded bg-[#334155]/30 px-1.5 py-0.5 text-[9px] font-bold text-[#94A3B8]">
+                                {t.setup_type || "SWEEP_ENTRY"}
+                              </span>
+                            )}
+                            <span className="font-mono text-[9px] text-[#64748B]">
+                              Score: {t.confluence_score}/100
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-[#94A3B8] leading-tight truncate" title={t.trigger_reason || t.setup_type}>
+                            {t.trigger_reason || t.notes || "Kriteria konfluensi terpenuhi"}
+                          </p>
+                        </div>
+                      </td>
                       <td className="py-2.5 text-right font-mono text-[#94A3B8]">
                         {t.lot_size !== undefined ? t.lot_size : dummyLotSize}
                       </td>
@@ -1984,7 +2103,7 @@ export default function TerminalHome() {
 
                   {!activePosition && simulationTrades.length === 0 && (
                     <tr>
-                      <td colSpan={14} className="py-8 text-center text-[#64748B]">
+                      <td colSpan={15} className="py-8 text-center text-[#64748B]">
                         Belum ada trade yang dieksekusi. Klik <strong className="text-[#10B981]">[ ▶ PLAY ]</strong> atau{" "}
                         <strong className="text-[#38BDF8]">[ NEXT BAR ]</strong> pada Bar Replay Controller di atas untuk
                         memulai pergerakan candle dan memicu deteksi liquidity sweep otomatis!
