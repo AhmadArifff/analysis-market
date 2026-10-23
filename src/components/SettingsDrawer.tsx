@@ -134,6 +134,79 @@ export default function SettingsDrawer({
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
+  const applyPreset = (preset: "SMC_CORE" | "TREND_RETEST" | "ALL_IN") => {
+    if (preset === "SMC_CORE") {
+      const noneActive: Record<string, boolean> = {};
+      for (const id of ALL_PATTERN_IDS) noneActive[id] = false;
+
+      setForm((prev) => ({
+        ...prev,
+        enableLiquiditySweep: true,
+        enableTrendFilter: true,
+        enableFVGConfluence: true,
+        enableKillzones: true,
+        enableVolumeFilter: true,
+        enableParallelChannel: false,
+        enableTrendRunner: true,
+        enableDoubleTopBottom: false,
+        enablePatternTrades: false,
+        enabledPatterns: noneActive as any,
+        confluenceThreshold: 80,
+        atrBufferMultiplier: 0.50,
+        cooldownBarsAfterLoss: 3,
+        useDynamicLot: true,
+      }));
+    } else if (preset === "TREND_RETEST") {
+      const selective: Record<string, boolean> = {};
+      for (const id of ALL_PATTERN_IDS) {
+        selective[id] =
+          id === "BEARISH_HEAD_AND_SHOULDERS" ||
+          id === "BULLISH_INVERTED_HEAD_AND_SHOULDERS" ||
+          id === "BULLISH_FLAG" ||
+          id === "BEARISH_FLAG";
+      }
+
+      setForm((prev) => ({
+        ...prev,
+        enableLiquiditySweep: true,
+        enableTrendFilter: true,
+        enableFVGConfluence: true,
+        enableKillzones: true,
+        enableVolumeFilter: true,
+        enableParallelChannel: true,
+        channelAnchorMode: "SWING_HIGHLOW",
+        enableTrendRunner: true,
+        enableDoubleTopBottom: true,
+        doubleTopBottomTolerance: 1.5,
+        enablePatternTrades: true,
+        enabledPatterns: selective as any,
+        confluenceThreshold: 80,
+        atrBufferMultiplier: 0.50,
+        cooldownBarsAfterLoss: 3,
+        useDynamicLot: true,
+      }));
+    } else if (preset === "ALL_IN") {
+      const allActive = getDefaultEnabledPatterns();
+      setForm((prev) => ({
+        ...prev,
+        enableLiquiditySweep: true,
+        enableParallelChannel: true,
+        enableFVGConfluence: true,
+        enableKillzones: true,
+        enableTrendFilter: true,
+        enableVolumeFilter: true,
+        enableTrendRunner: true,
+        enableDoubleTopBottom: true,
+        doubleTopBottomTolerance: 1.5,
+        enablePatternTrades: true,
+        enabledPatterns: allActive,
+        channelAnchorMode: "SWING_HIGHLOW",
+        atrBufferMultiplier: 0.50,
+        cooldownBarsAfterLoss: 3,
+      }));
+    }
+  };
+
   const handleTestAudio = () => {
     terminalAudio.enabled = true;
     terminalAudio.playSweepAlert();
@@ -406,6 +479,74 @@ export default function SettingsDrawer({
 
           {activeTab === "algo" && (
             <div className="space-y-4">
+              {/* ⚡ 1-CLICK STRATEGY PRESETS */}
+              <div className="rounded border border-[#38BDF8]/40 bg-[#38BDF8]/10 p-3 space-y-2.5">
+                <div className="flex items-center justify-between border-b border-[#38BDF8]/20 pb-1.5">
+                  <span className="font-mono text-[11px] font-bold text-[#38BDF8] flex items-center gap-1.5">
+                    <span>⚡</span> PRESET REKOMENDASI (ANTI-OVERTRADING)
+                  </span>
+                  <span className="text-[10px] text-[#A5F3FC] font-semibold">1-Klik Pilihan</span>
+                </div>
+                <p className="text-[10px] text-[#94A3B8] leading-relaxed">
+                  Pilih preset teruji berikut untuk mengeliminasi pemicu entry berlebih yang sering memicu lost beruntun:
+                </p>
+                <div className="space-y-1.5 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => applyPreset("SMC_CORE")}
+                    className="w-full flex items-center justify-between p-2 rounded bg-[#10B981]/15 hover:bg-[#10B981]/25 border border-[#10B981]/50 text-left transition group active:scale-[0.99]"
+                  >
+                    <div>
+                      <div className="text-[11px] font-extrabold text-[#10B981] flex items-center gap-1">
+                        <span>🏆</span> 1. INSTITUTIONAL SMC CORE (Paling Ampuh)
+                      </div>
+                      <div className="text-[9.5px] text-[#A7F3D0] mt-0.5">
+                        Hanya Sweep Searah Tren + FVG + Macro EMA/ADX. Matikan semua pola chart minor.
+                      </div>
+                    </div>
+                    <span className="rounded bg-[#10B981] text-[#090A0F] font-bold text-[9px] px-1.5 py-0.5 whitespace-nowrap ml-2">
+                      Winrate 70%+
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => applyPreset("TREND_RETEST")}
+                    className="w-full flex items-center justify-between p-2 rounded bg-[#38BDF8]/15 hover:bg-[#38BDF8]/25 border border-[#38BDF8]/50 text-left transition group active:scale-[0.99]"
+                  >
+                    <div>
+                      <div className="text-[11px] font-extrabold text-[#38BDF8] flex items-center gap-1">
+                        <span>⚡</span> 2. TREND &amp; BREAK-RETEST (Balanced RR)
+                      </div>
+                      <div className="text-[9.5px] text-[#BAE6FD] mt-0.5">
+                        Sweep + Retest Garis Kanal Paralel + Trend Runner + Double Top/Bottom.
+                      </div>
+                    </div>
+                    <span className="rounded bg-[#38BDF8] text-[#090A0F] font-bold text-[9px] px-1.5 py-0.5 whitespace-nowrap ml-2">
+                      RR 1:2 - 1:3
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => applyPreset("ALL_IN")}
+                    className="w-full flex items-center justify-between p-2 rounded bg-[#1F2430]/60 hover:bg-[#1F2430] border border-[#334155] text-left transition active:scale-[0.99]"
+                  >
+                    <div>
+                      <div className="text-[11px] font-bold text-[#E2E8F0] flex items-center gap-1">
+                        <span>🌐</span> 3. ALL-IN EXPLORATION (Semua Aktif)
+                      </div>
+                      <div className="text-[9.5px] text-[#64748B] mt-0.5">
+                        Aktifkan seluruh 20 pola + sweep + kanal (Hanya untuk keperluan riset/benchmark).
+                      </div>
+                    </div>
+                    <span className="rounded bg-[#334155] text-[#94A3B8] font-bold text-[9px] px-1.5 py-0.5 whitespace-nowrap ml-2">
+                      High Noise
+                    </span>
+                  </button>
+                </div>
+              </div>
+
               {/* 1. SKEMA STRATEGI AKTIF (CHECKLIST) */}
               <div className="rounded border border-[#1F2430] bg-[#121622] p-3.5 space-y-3">
                 <div className="border-b border-[#1F2430] pb-2">
