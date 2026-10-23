@@ -275,6 +275,7 @@ export function getDefaultEnabledPatterns(): Record<ChartPatternId, boolean> {
 export interface DetectChartPatternsOptions {
   enableDoubleTopBottom?: boolean;
   doubleTopBottomTolerance?: number; // e.g. 0.015 (1.5%)
+  atrBufferMultiplier?: number; // e.g. 0.50 (default: 0.50x ATR buffer)
 }
 
 /**
@@ -296,6 +297,8 @@ export function detectChartPatterns(
 
   const isDoubleTopBottomAllowed = options?.enableDoubleTopBottom !== false;
   const dblTol = options?.doubleTopBottomTolerance ?? 0.015;
+  const atrBufferMult = options?.atrBufferMultiplier ?? 0.50;
+  const atrBuff = currentATR * atrBufferMult;
 
   const windowSize = Math.min(30, currentIndex + 1);
   const windowCandles = candles.slice(currentIndex - windowSize + 1, currentIndex + 1);
@@ -352,7 +355,7 @@ export function detectChartPatterns(
             neckline: necklineLow.price,
             trigger_price: necklineLow.price,
             target_price: necklineLow.price - height,
-            stop_loss: Math.max(h1.price, h2.price) + currentATR * 0.2,
+            stop_loss: Math.max(h1.price, h2.price) + atrBuff,
             bar_start_idx: h1.index,
             bar_end_idx: currentIndex,
             status: isBreakout ? "CONFIRMED_BREAKOUT" : "FORMING",
@@ -389,7 +392,7 @@ export function detectChartPatterns(
             neckline: necklineHigh.price,
             trigger_price: necklineHigh.price,
             target_price: necklineHigh.price + height,
-            stop_loss: Math.min(l1.price, l2.price) - currentATR * 0.2,
+            stop_loss: Math.min(l1.price, l2.price) - atrBuff,
             bar_start_idx: l1.index,
             bar_end_idx: currentIndex,
             status: isBreakout ? "CONFIRMED_BREAKOUT" : "FORMING",
@@ -425,7 +428,7 @@ export function detectChartPatterns(
           neckline,
           trigger_price: neckline,
           target_price: neckline - height,
-          stop_loss: right.price + currentATR * 0.2,
+          stop_loss: right.price + atrBuff,
           bar_start_idx: left.index,
           bar_end_idx: currentIndex,
           status: isBreakout ? "CONFIRMED_BREAKOUT" : "FORMING",
@@ -460,7 +463,7 @@ export function detectChartPatterns(
           neckline,
           trigger_price: neckline,
           target_price: neckline + height,
-          stop_loss: right.price - currentATR * 0.2,
+          stop_loss: right.price - atrBuff,
           bar_start_idx: left.index,
           bar_end_idx: currentIndex,
           status: isBreakout ? "CONFIRMED_BREAKOUT" : "FORMING",
@@ -494,7 +497,7 @@ export function detectChartPatterns(
         neckline: h2.price,
         trigger_price: h2.price,
         target_price: h2.price + height,
-        stop_loss: l2.price - currentATR * 0.2,
+        stop_loss: l2.price - atrBuff,
         bar_start_idx: Math.min(h1.index, l1.index),
         bar_end_idx: currentIndex,
         status: isBreakout ? "CONFIRMED_BREAKOUT" : "FORMING",
@@ -527,7 +530,7 @@ export function detectChartPatterns(
         neckline: l2.price,
         trigger_price: l2.price,
         target_price: l2.price - height,
-        stop_loss: h2.price + currentATR * 0.2,
+        stop_loss: h2.price + atrBuff,
         bar_start_idx: Math.min(h1.index, l1.index),
         bar_end_idx: currentIndex,
         status: isBreakout ? "CONFIRMED_BREAKOUT" : "FORMING",
@@ -562,7 +565,7 @@ export function detectChartPatterns(
         neckline: h2.price,
         trigger_price: h2.price,
         target_price: currentBar.close + poleHeight * 0.8,
-        stop_loss: l2.price - currentATR * 0.2,
+        stop_loss: l2.price - atrBuff,
         bar_start_idx: currentIndex - windowSize,
         bar_end_idx: currentIndex,
         status: isBreakout ? "CONFIRMED_BREAKOUT" : "FORMING",
@@ -597,7 +600,7 @@ export function detectChartPatterns(
         neckline: l2.price,
         trigger_price: l2.price,
         target_price: currentBar.close - poleHeight * 0.8,
-        stop_loss: h2.price + currentATR * 0.2,
+        stop_loss: h2.price + atrBuff,
         bar_start_idx: currentIndex - windowSize,
         bar_end_idx: currentIndex,
         status: isBreakout ? "CONFIRMED_BREAKOUT" : "FORMING",

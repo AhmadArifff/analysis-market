@@ -29,7 +29,10 @@ import PatternVisualAsset from "@/components/PatternVisualAsset";
 export interface StrategySettings {
   initialCapital: number;
   lotSize: number; // e.g. 0.10, 1.0, 0.01 (Configurable dummy lot)
+  useDynamicLot: boolean; // Auto Risk % Lot vs Fixed Lot
   riskPerTradePct: number;
+  atrBufferMultiplier: number; // e.g. 0.50 (default: 0.50x ATR)
+  cooldownBarsAfterLoss: number; // e.g. 3 bars cooldown after a loss
   minWickRatio: number; // e.g. 0.20 (20%)
   retailRRThreshold: number; // e.g. 1.5
   confluenceThreshold: number; // e.g. 80
@@ -64,7 +67,10 @@ export interface StrategySettings {
 export const DEFAULT_SETTINGS: StrategySettings = {
   initialCapital: 10000,
   lotSize: 0.10,
+  useDynamicLot: false,
   riskPerTradePct: 1.0,
+  atrBufferMultiplier: 0.50,
+  cooldownBarsAfterLoss: 3,
   minWickRatio: 0.20,
   retailRRThreshold: 1.5,
   confluenceThreshold: 80,
@@ -263,34 +269,110 @@ export default function SettingsDrawer({
                 />
               </div>
 
-              <div>
-                <label className="text-[#8E9BAE] block mb-1">UKURAN LOT PER ENTRY (LOTS)</label>
+              {/* Mode Lot Sizing: Fixed vs Auto Risk % */}
+              <div className="pt-1">
+                <label className="text-[#8E9BAE] block mb-1.5 flex items-center justify-between">
+                  <span>MODE UKURAN LOT TRADING</span>
+                  <span className={form.useDynamicLot ? "text-[#10B981] font-bold" : "text-[#38BDF8] font-bold"}>
+                    {form.useDynamicLot ? "🛡️ AUTO RISK %" : "MANUAL FIXED"}
+                  </span>
+                </label>
+                <div className="grid grid-cols-2 gap-2 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => handleChange("useDynamicLot", false)}
+                    className={`py-2 px-3 rounded text-[11px] font-semibold border transition ${
+                      !form.useDynamicLot
+                        ? "bg-[#38BDF8]/20 border-[#38BDF8] text-[#38BDF8]"
+                        : "bg-[#121622] border-[#1F2430] text-[#64748B] hover:text-[#94A3B8]"
+                    }`}
+                  >
+                    MANUAL LOT (FIXED)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleChange("useDynamicLot", true)}
+                    className={`py-2 px-3 rounded text-[11px] font-semibold border transition ${
+                      form.useDynamicLot
+                        ? "bg-[#10B981]/20 border-[#10B981] text-[#10B981]"
+                        : "bg-[#121622] border-[#1F2430] text-[#64748B] hover:text-[#94A3B8]"
+                    }`}
+                  >
+                    🛡️ AUTO RISK % (DYNAMIC)
+                  </button>
+                </div>
+
+                {!form.useDynamicLot ? (
+                  <div>
+                    <label className="text-[#8E9BAE] block mb-1">UKURAN LOT PER ENTRY (LOTS)</label>
+                    <input
+                      type="number"
+                      min={0.001}
+                      step={0.01}
+                      value={form.lotSize}
+                      onChange={(e) => handleChange("lotSize", parseFloat(e.target.value) || 0.1)}
+                      className="w-full rounded border border-[#1F2430] bg-[#121622] px-3 py-2 text-[#F8FAFC] focus:border-[#38BDF8] focus:outline-none"
+                    />
+                    <span className="text-[10px] text-[#64748B] mt-1 block">
+                      Nominal lot tetap per posisi (misal 0.01, 0.10, 1.0).
+                    </span>
+                  </div>
+                ) : (
+                  <div className="rounded border border-[#10B981]/30 bg-[#10B981]/10 p-2.5 space-y-2">
+                    <label className="text-[#10B981] font-bold block">RISIKO PER TRADE (% MODAL)</label>
+                    <input
+                      type="number"
+                      min={0.1}
+                      max={10}
+                      step={0.1}
+                      value={form.riskPerTradePct}
+                      onChange={(e) => handleChange("riskPerTradePct", parseFloat(e.target.value) || 1.0)}
+                      className="w-full rounded border border-[#10B981]/40 bg-[#0B0D13] px-3 py-2 text-[#F8FAFC] focus:border-[#10B981] focus:outline-none"
+                    />
+                    <span className="text-[10px] text-[#A7F3D0] block leading-relaxed">
+                      💡 <strong>Sizing Otomatis:</strong> Lot dihitung dari <code>(Modal x Risk%) / (Jarak SL x Multiplier)</code>. Modal kecil ($100-$1000) otomatis menggunakan lot mikro (0.01) agar tahan puluhan trade tanpa margin call!
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Stop Loss ATR Buffer */}
+              <div className="pt-2 border-t border-[#1F2430]">
+                <label className="text-[#8E9BAE] block mb-1 flex items-center justify-between">
+                  <span>BUFFER STOP LOSS (x ATR)</span>
+                  <span className="text-[#38BDF8] font-bold">{form.atrBufferMultiplier || 0.5}x ATR</span>
+                </label>
                 <input
                   type="number"
-                  min={0.001}
-                  step={0.01}
-                  value={form.lotSize}
-                  onChange={(e) => handleChange("lotSize", parseFloat(e.target.value) || 0.1)}
+                  min={0.15}
+                  max={2.0}
+                  step={0.05}
+                  value={form.atrBufferMultiplier || 0.5}
+                  onChange={(e) => handleChange("atrBufferMultiplier", parseFloat(e.target.value) || 0.5)}
                   className="w-full rounded border border-[#1F2430] bg-[#121622] px-3 py-2 text-[#F8FAFC] focus:border-[#38BDF8] focus:outline-none"
                 />
                 <span className="text-[10px] text-[#64748B] mt-1 block">
-                  Bebas diisi nominal berapa saja (misal 0.01, 0.10, 1.0, 5.0).
+                  Jarak nafas pengaman SL dari ujung wick. Standar institusional 0.50x ATR melindungi dari false stop-out akibat spread & micro-whipsaw pasar.
                 </span>
               </div>
 
+              {/* Cooldown Bars After Loss */}
               <div>
-                <label className="text-[#8E9BAE] block mb-1">RISIKO PER TRADE (% CAP)</label>
+                <label className="text-[#8E9BAE] block mb-1 flex items-center justify-between">
+                  <span>JEDA SETELAH LOSS (COOLDOWN CANDLE)</span>
+                  <span className="text-[#F59E0B] font-bold">{form.cooldownBarsAfterLoss || 3} Bar</span>
+                </label>
                 <input
                   type="number"
-                  min={0.1}
-                  max={5}
-                  step={0.1}
-                  value={form.riskPerTradePct}
-                  onChange={(e) => handleChange("riskPerTradePct", parseFloat(e.target.value) || 1.0)}
-                  className="w-full rounded border border-[#1F2430] bg-[#121622] px-3 py-2 text-[#F8FAFC] focus:border-[#38BDF8] focus:outline-none"
+                  min={0}
+                  max={15}
+                  step={1}
+                  value={form.cooldownBarsAfterLoss || 3}
+                  onChange={(e) => handleChange("cooldownBarsAfterLoss", parseInt(e.target.value) || 0)}
+                  className="w-full rounded border border-[#1F2430] bg-[#121622] px-3 py-2 text-[#F8FAFC] focus:border-[#F59E0B] focus:outline-none"
                 />
                 <span className="text-[10px] text-[#64748B] mt-1 block">
-                  Standar institusional: 1.0% per trade ($100 pada modal $10k).
+                  Mencegah overtrading saat market trending kuat. Jika posisi kena SL, algo jeda N candle sebelum boleh membuka entry baru.
                 </span>
               </div>
 

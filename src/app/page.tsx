@@ -288,6 +288,8 @@ export default function TerminalHome() {
   const [dummyRR, setDummyRR] = useState<number>(DEFAULT_SETTINGS.retailRRThreshold || 2.0);
   const [currentBalance, setCurrentBalance] = useState<number>(DEFAULT_SETTINGS.initialCapital);
   const [isLiquidated, setIsLiquidated] = useState<boolean>(false);
+  const [lastLossIndex, setLastLossIndex] = useState<number | null>(null);
+  const [cooldownRemainingBars, setCooldownRemainingBars] = useState<number>(0);
 
   // Sync state if SettingsDrawer updates initialCapital, lotSize, or retailRRThreshold
   useEffect(() => {
@@ -321,6 +323,10 @@ export default function TerminalHome() {
     enabledPatterns: settings.enabledPatterns,
     channelLookback: settings.channelLookback ?? 25,
     channelAnchorMode: settings.channelAnchorMode ?? "SWING_HIGHLOW",
+    atrBufferMultiplier: settings.atrBufferMultiplier ?? 0.50,
+    cooldownBarsAfterLoss: settings.cooldownBarsAfterLoss ?? 3,
+    useDynamicLot: settings.useDynamicLot ?? false,
+    riskPerTradePct: settings.riskPerTradePct ?? 1.0,
   }), [
     settings.enableLiquiditySweep,
     settings.enableParallelChannel,
@@ -335,6 +341,10 @@ export default function TerminalHome() {
     settings.enabledPatterns,
     settings.channelLookback,
     settings.channelAnchorMode,
+    settings.atrBufferMultiplier,
+    settings.cooldownBarsAfterLoss,
+    settings.useDynamicLot,
+    settings.riskPerTradePct,
   ]);
 
   const [realExhaustion, setRealExhaustion] = useState<{
@@ -492,8 +502,15 @@ export default function TerminalHome() {
       settings.retailRRThreshold,
       currentBalance,
       dummyLotSize,
-      schemaConfig
+      schemaConfig,
+      settings.channelLookback ?? 25,
+      lastLossIndex
     );
+
+    if (stepResult.lastLossIndex !== undefined) {
+      setLastLossIndex(stepResult.lastLossIndex);
+    }
+    setCooldownRemainingBars(stepResult.cooldownRemainingBars ?? 0);
 
     setPools(stepResult.activePools || []);
     setActiveChannel(stepResult.activeChannel ?? null);
@@ -613,6 +630,8 @@ export default function TerminalHome() {
     setActivePosition(null);
     setSimulationTrades([]);
     setIsLiquidated(false);
+    setLastLossIndex(null);
+    setCooldownRemainingBars(0);
     const initialBal = targetBalance !== undefined ? targetBalance : dummyCapital;
     setCurrentBalance(initialBal);
     const startIdx = Math.max(10, Math.floor(fullCandles.length * 0.35));
@@ -633,7 +652,7 @@ export default function TerminalHome() {
     setPools(res.activePools || []);
     setActiveChannel(res.activeChannel ?? null);
     setDetectedPattern(res.detectedPattern ?? null);
-    setReplayAlert(`🔄 Bar Replay di-reset ke histori masa lalu. Modal siap: $${initialBal.toLocaleString()} | Lot: ${dummyLotSize}`);
+    setReplayAlert(`🔄 Bar Replay di-reset ke histori masa lalu. Modal siap: $${initialBal.toLocaleString()} | Lot: ${settings.useDynamicLot ? `Auto Risk (${settings.riskPerTradePct || 1}%)` : dummyLotSize}`);
   };
 
   // Run Full Automated Backtest across history with dummy capital & lot size
@@ -1378,22 +1397,48 @@ export default function TerminalHome() {
                     </div>
                   </div>
 
-                  {/* Nominal Lot Size Input */}
+                  {/* Nominal Lot Size Input & Dynamic Sizing Toggle */}
                   <div className="flex items-center gap-1 border-l border-[#1F2430] pl-2">
-                    <span className="font-mono text-[10px] font-bold text-[#8E9BAE]">LOT:</span>
-                    <input
-                      type="number"
-                      min={0.001}
-                      step={0.01}
-                      value={dummyLotSize}
-                      onChange={(e) => {
-                        const val = Math.max(0.001, parseFloat(e.target.value) || 0.01);
-                        setDummyLotSize(val);
-                        setSettings((prev) => ({ ...prev, lotSize: val }));
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSettings((prev) => ({ ...prev, useDynamicLot: !prev.useDynamicLot }));
                       }}
-                      className="w-16 rounded bg-[#0A0D14] px-1.5 py-0.5 font-mono text-xs font-semibold text-[#F8FAFC] border border-[#1F2430] focus:border-[#38BDF8] focus:outline-none"
-                      title="Isi nominal lot size berapa saja (misal 0.01, 0.10, 1.0, 5.0)"
-                    />
+                      className={`px-1.5 py-0.5 rounded font-mono text-[9px] font-bold border transition ${
+                        settings.useDynamicLot
+                          ? "bg-[#10B981]/20 border-[#10B981] text-[#10B981]"
+                          : "bg-[#1E293B]/40 border-[#334155] text-[#94A3B8] hover:text-[#E2E8F0]"
+                      }`}
+                      title={
+                        settings.useDynamicLot
+                          ? "Sizing Otomatis Aktif (Risk 1% modal per trade). Klik untuk ganti ke Manual Lot."
+                          : "Manual Fixed Lot. Klik untuk aktifkan Auto Risk % Sizing."
+                      }
+                    >
+                      {settings.useDynamicLot ? "🛡️ AUTO RISK" : "LOT:"}
+                    </button>
+                    {!settings.useDynamicLot ? (
+                      <input
+                        type="number"
+                        min={0.001}
+                        step={0.01}
+                        value={dummyLotSize}
+                        onChange={(e) => {
+                          const val = Math.max(0.001, parseFloat(e.target.value) || 0.01);
+                          setDummyLotSize(val);
+                          setSettings((prev) => ({ ...prev, lotSize: val }));
+                        }}
+                        className="w-16 rounded bg-[#0A0D14] px-1.5 py-0.5 font-mono text-xs font-semibold text-[#F8FAFC] border border-[#1F2430] focus:border-[#38BDF8] focus:outline-none"
+                        title="Isi nominal lot size berapa saja (misal 0.01, 0.10, 1.0, 5.0)"
+                      />
+                    ) : (
+                      <span
+                        className="rounded bg-[#10B981]/15 border border-[#10B981]/40 px-1.5 py-0.5 font-mono text-[11px] font-bold text-[#10B981]"
+                        title={`Risiko ${settings.riskPerTradePct || 1}% per trade (Lot dihitung otomatis sesuai jarak SL & modal)`}
+                      >
+                        {settings.riskPerTradePct || 1.0}% CAP
+                      </span>
+                    )}
                   </div>
 
                   {/* Dynamic Saldo Live Badge */}
@@ -1430,6 +1475,18 @@ export default function TerminalHome() {
                       </button>
                     )}
                   </div>
+
+                  {/* Cooldown Active Indicator Badge */}
+                  {cooldownRemainingBars > 0 && (
+                    <div className="flex items-center gap-1 border-l border-[#1F2430] pl-2">
+                      <span
+                        className="flex items-center gap-1 rounded bg-[#F59E0B]/15 border border-[#F59E0B]/50 px-2 py-0.5 font-mono text-[10px] font-bold text-[#F59E0B] animate-pulse"
+                        title={`Jeda proteksi overtrading aktif. Menunggu ${cooldownRemainingBars} bar setelah Stop Loss sebelum entry baru.`}
+                      >
+                        ⏳ COOLDOWN ({cooldownRemainingBars} BAR)
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Player Controls */}

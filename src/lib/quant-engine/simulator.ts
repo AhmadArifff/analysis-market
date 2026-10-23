@@ -100,6 +100,8 @@ export interface SimulationStepResult {
   adxValue?: number;
   currentBalance?: number;
   isLiquidated?: boolean;
+  lastLossIndex?: number | null;
+  cooldownRemainingBars?: number;
 }
 
 /**
@@ -142,6 +144,42 @@ export function calculateTradePnL(
   };
 }
 
+/**
+ * Calculates dynamic lot size based on capital, risk percentage, and distance to Stop Loss
+ * Formula: Lot = (Capital * Risk%) / (Distance_to_SL * Multiplier)
+ */
+export function calculateDynamicLotSize(
+  symbol: string,
+  capital: number,
+  riskPct: number,
+  entryPx: number,
+  slPx: number,
+  minLot: number = 0.01,
+  maxLot: number = 20.0
+): number {
+  const safeCap = Math.max(10, capital);
+  const riskUsd = safeCap * (Math.max(0.1, riskPct) / 100);
+  const slDistance = Math.abs(entryPx - slPx);
+  if (slDistance <= 0) return minLot;
+
+  const multiplier = calculateContractMultiplier(symbol, entryPx);
+  const rawLot = riskUsd / (slDistance * multiplier);
+
+  const clean = symbol.replace(/[^A-Z0-9]/g, "").toUpperCase();
+  if (clean.includes("XAU") || clean.includes("GOLD") || clean.includes("EUR") || clean.includes("GBP")) {
+    const clamped = Math.max(minLot, Math.min(maxLot, rawLot));
+    return parseFloat(clamped.toFixed(2));
+  }
+  
+  if (entryPx >= 100) {
+    const clamped = Math.max(minLot, Math.min(maxLot, rawLot));
+    return parseFloat(clamped.toFixed(3));
+  }
+
+  const clamped = Math.max(minLot, Math.min(maxLot, rawLot));
+  return parseFloat(clamped.toFixed(2));
+}
+
 export interface StrategySchemaConfig {
   enableLiquiditySweep?: boolean;
   enableParallelChannel?: boolean;
@@ -156,6 +194,12 @@ export interface StrategySchemaConfig {
   enabledPatterns?: Record<ChartPatternId, boolean>;
   channelLookback?: number;
   channelAnchorMode?: "SWING_HIGHLOW" | "REGRESSION";
+
+  // Institutional Risk Protections
+  atrBufferMultiplier?: number; // e.g. 0.50 (default: 0.50x ATR, protecting from wick noise)
+  cooldownBarsAfterLoss?: number; // e.g. 3 (default: 3 bars cooldown after a loss)
+  useDynamicLot?: boolean; // Toggle dynamic lot sizing based on riskPerTradePct
+  riskPerTradePct?: number; // e.g. 1.0 (1% risk)
 }
 
 /**
@@ -173,7 +217,8 @@ export function stepReplaySimulation(
   currentBalance: number = 10000,
   lotSize: number = 0.10,
   configOrEnableParallel: boolean | StrategySchemaConfig = true,
-  channelLookback: number = 25
+  channelLookback: number = 25,
+  lastLossBarIndex: number | null = null
 ): SimulationStepResult {
   const schema: StrategySchemaConfig =
     typeof configOrEnableParallel === "object" && configOrEnableParallel !== null
@@ -192,6 +237,10 @@ export function stepReplaySimulation(
           enablePatternTrades: true,
           enabledPatterns: getDefaultEnabledPatterns(),
           channelAnchorMode: "SWING_HIGHLOW",
+          atrBufferMultiplier: 0.50,
+          cooldownBarsAfterLoss: 3,
+          useDynamicLot: false,
+          riskPerTradePct: 1.0,
         };
 
   const enableLiquiditySweep = schema.enableLiquiditySweep ?? true;
@@ -207,6 +256,12 @@ export function stepReplaySimulation(
   const effectiveChannelLookback = schema.channelLookback ?? 25;
   const channelAnchorMode = schema.channelAnchorMode ?? "SWING_HIGHLOW";
 
+  // Risk calibration parameters
+  const effectiveAtrMult = schema.atrBufferMultiplier ?? 0.50;
+  const cooldownBars = schema.cooldownBarsAfterLoss ?? 3;
+  const useDynamicLot = schema.useDynamicLot ?? false;
+  const riskPerTradePct = schema.riskPerTradePct ?? 1.0;
+
   if (currentIndex < 5 || currentIndex >= allCandles.length) {
     return {
       closedTrade: null,
@@ -215,6 +270,8 @@ export function stepReplaySimulation(
       sweepAlert: null,
       currentBalance,
       isLiquidated: currentBalance <= 0,
+      lastLossIndex: lastLossBarIndex,
+      cooldownRemainingBars: 0,
     };
   }
 
@@ -227,6 +284,8 @@ export function stepReplaySimulation(
       sweepAlert: "💀 MODAL HABIS ($0.00)! Akun mengalami likuidasi. Simulasi dihentikan. Silakan isi modal dummy untuk melanjutkan.",
       currentBalance: 0,
       isLiquidated: true,
+      lastLossIndex: lastLossBarIndex,
+      cooldownRemainingBars: 0,
     };
   }
 
@@ -242,6 +301,8 @@ export function stepReplaySimulation(
   let runningBalance = currentBalance;
   let isLiquidated = false;
 
+  let updatedLossIndex = lastLossBarIndex;
+
   // 1. If an active trade is open, check if current bar hits TP or SL
   if (activePos) {
     const tradeLot = activePos.lot_size || lotSize;
@@ -252,6 +313,7 @@ export function stepReplaySimulation(
         runningBalance = closed.newBalance;
         isLiquidated = closed.isLiquidated;
         activePos = null;
+        updatedLossIndex = currentIndex;
         alertMessage = isLiquidated
           ? `💀 STOP LOSS & MODAL HABIS! Saldo $0.00. Simulasi berhenti otomatis.`
           : `STOP LOSS HIT (LONG @ $${currentBar.low})! Result: ${closed.trade.pnl_pct}% (${closed.trade.pnl_usd && closed.trade.pnl_usd >= 0 ? "+" : ""}$${closed.trade.pnl_usd}) | Saldo: $${runningBalance}`;
@@ -270,6 +332,7 @@ export function stepReplaySimulation(
         runningBalance = closed.newBalance;
         isLiquidated = closed.isLiquidated;
         activePos = null;
+        updatedLossIndex = currentIndex;
         alertMessage = isLiquidated
           ? `💀 STOP LOSS & MODAL HABIS! Saldo $0.00. Simulasi berhenti otomatis.`
           : `STOP LOSS HIT (SHORT @ $${currentBar.high})! Result: ${closed.trade.pnl_pct}% (${closed.trade.pnl_usd && closed.trade.pnl_usd >= 0 ? "+" : ""}$${closed.trade.pnl_usd}) | Saldo: $${runningBalance}`;
@@ -293,8 +356,22 @@ export function stepReplaySimulation(
       sweepAlert: alertMessage,
       currentBalance: 0,
       isLiquidated: true,
+      lastLossIndex: updatedLossIndex,
+      cooldownRemainingBars: 0,
     };
   }
+
+  // Check cooldown status after a stop loss
+  const isCoolingDown = updatedLossIndex !== null && (currentIndex - updatedLossIndex) <= cooldownBars;
+  const cooldownRemaining = isCoolingDown && updatedLossIndex !== null ? (cooldownBars - (currentIndex - updatedLossIndex) + 1) : 0;
+
+  // Dynamic lot size resolver
+  const resolveTradeLot = (entryPx: number, slPx: number): number => {
+    if (useDynamicLot) {
+      return calculateDynamicLotSize(symbol, runningBalance, riskPerTradePct, entryPx, slPx);
+    }
+    return lotSize;
+  };
 
   // 2. Compute fractals and liquidity pools strictly on past bars (0 .. currentIndex - 1)
   const pastCandles = allCandles.slice(0, currentIndex);
@@ -493,40 +570,45 @@ export function stepReplaySimulation(
         confluenceSnapshot = evaluation;
 
         if (evaluation.is_high_probability) {
-          // Structural Stop Loss placed behind the sweep low with an ATR buffer
-          const buffer = Math.max(currentATR * 0.15, (currentBar.close - currentBar.low) * 0.1);
-          const sl = currentBar.low - buffer;
-          const riskDist = Math.max(currentBar.close - sl, currentBar.close * 0.003);
-          const minTarget = currentBar.close + riskDist * effectiveRR;
+          if (isCoolingDown) {
+            alertMessage = `⏳ [JEDA COOLDOWN] Sinyal Long Sweep dilewati. Menunggu ${cooldownRemaining} bar jeda setelah Stop Loss.`;
+          } else {
+            // Structural Stop Loss placed behind the sweep low with a calibrated ATR buffer
+            const buffer = Math.max(currentATR * effectiveAtrMult, (currentBar.close - currentBar.low) * 0.15);
+            const sl = currentBar.low - buffer;
+            const riskDist = Math.max(currentBar.close - sl, currentBar.close * 0.003);
+            const minTarget = currentBar.close + riskDist * effectiveRR;
 
-          // TP targets opposing fractal high if it offers >= effectiveRR, otherwise standard RR target
-          const finalTP = lastHigh && lastHigh.price >= minTarget ? lastHigh.price : minTarget;
+            // TP targets opposing fractal high if it offers >= effectiveRR, otherwise standard RR target
+            const finalTP = lastHigh && lastHigh.price >= minTarget ? lastHigh.price : minTarget;
+            const effectiveLot = resolveTradeLot(currentBar.close, sl);
 
-          const triggerReasonLong = `Sweep Buy SL @ $${buySweepLevel} (Lower Wick ${(lowerWickRatio * 100).toFixed(1)}% ≥ ${(effectiveWickRatio * 100).toFixed(0)}%) + ADX ${round2(currentADX)}${fvgMatch ? " + FVG Imbalance" : ""}${enableTrendFilter ? (isUptrend ? " + Trend Dip" : " + Counter-Exhaustion") : ""}`;
+            const triggerReasonLong = `Sweep Buy SL @ $${buySweepLevel} (Lower Wick ${(lowerWickRatio * 100).toFixed(1)}% ≥ ${(effectiveWickRatio * 100).toFixed(0)}%) + ADX ${round2(currentADX)}${fvgMatch ? " + FVG Imbalance" : ""}${enableTrendFilter ? (isUptrend ? " + Trend Dip" : " + Counter-Exhaustion") : ""}`;
 
-          activePos = {
-            trade_id: Date.now() + Math.floor(Math.random() * 1000),
-            symbol,
-            side: "LONG",
-            entry_time: currentBar.time,
-            entry_index: currentIndex,
-            entry_px: fmtPrice(currentBar.close),
-            sl_px: fmtPrice(sl),
-            tp_px: fmtPrice(finalTP),
-            confluence_score: evaluation.score,
-            swept_pool_price: buySweepLevel,
-            setup_type: isUptrend
-              ? `TREND_DIP_BUY [${profile.category}]`
-              : `COUNTER_EXHAUSTION_BUY [${profile.category}]`,
-            lot_size: lotSize,
-            trigger_category: "LIQUIDITY_SWEEP",
-            trigger_reason: triggerReasonLong,
-          };
+            activePos = {
+              trade_id: Date.now() + Math.floor(Math.random() * 1000),
+              symbol,
+              side: "LONG",
+              entry_time: currentBar.time,
+              entry_index: currentIndex,
+              entry_px: fmtPrice(currentBar.close),
+              sl_px: fmtPrice(sl),
+              tp_px: fmtPrice(finalTP),
+              confluence_score: evaluation.score,
+              swept_pool_price: buySweepLevel,
+              setup_type: isUptrend
+                ? `TREND_DIP_BUY [${profile.category}]`
+                : `COUNTER_EXHAUSTION_BUY [${profile.category}]`,
+              lot_size: effectiveLot,
+              trigger_category: "LIQUIDITY_SWEEP",
+              trigger_reason: triggerReasonLong,
+            };
 
-          const pool = activePools.find((p) => p.pool_type === "BUY_SL");
-          if (pool) pool.status = "SWEPT";
+            const pool = activePools.find((p) => p.pool_type === "BUY_SL");
+            if (pool) pool.status = "SWEPT";
 
-          alertMessage = `LIQUIDITY SWEEP ENTRY! LONG @ $${activePos.entry_px} | Confluence: ${evaluation.score}/100 | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ADX: ${round2(currentADX)} | ${profile.category}${fvgMatch ? " + FVG" : ""}`;
+            alertMessage = `LIQUIDITY SWEEP ENTRY! LONG @ $${activePos.entry_px} | Confluence: ${evaluation.score}/100 | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | Lot: ${effectiveLot}${useDynamicLot ? ` (Auto Risk ${riskPerTradePct}%)` : ""} | ADX: ${round2(currentADX)} | ${profile.category}${fvgMatch ? " + FVG" : ""}`;
+          }
         }
       }
 
@@ -562,40 +644,45 @@ export function stepReplaySimulation(
         confluenceSnapshot = evaluation;
 
         if (evaluation.is_high_probability) {
-          // Structural Stop Loss placed behind the sweep high with an ATR buffer
-          const buffer = Math.max(currentATR * 0.15, (currentBar.high - currentBar.close) * 0.1);
-          const sl = currentBar.high + buffer;
-          const riskDist = Math.max(sl - currentBar.close, currentBar.close * 0.003);
-          const minTarget = currentBar.close - riskDist * effectiveRR;
+          if (isCoolingDown) {
+            alertMessage = `⏳ [JEDA COOLDOWN] Sinyal Short Sweep dilewati. Menunggu ${cooldownRemaining} bar jeda setelah Stop Loss.`;
+          } else {
+            // Structural Stop Loss placed behind the sweep high with a calibrated ATR buffer
+            const buffer = Math.max(currentATR * effectiveAtrMult, (currentBar.high - currentBar.close) * 0.15);
+            const sl = currentBar.high + buffer;
+            const riskDist = Math.max(sl - currentBar.close, currentBar.close * 0.003);
+            const minTarget = currentBar.close - riskDist * effectiveRR;
 
-          // TP targets opposing fractal low if it offers >= effectiveRR, otherwise standard RR target
-          const finalTP = lastLow && lastLow.price <= minTarget ? lastLow.price : minTarget;
+            // TP targets opposing fractal low if it offers >= effectiveRR, otherwise standard RR target
+            const finalTP = lastLow && lastLow.price <= minTarget ? lastLow.price : minTarget;
+            const effectiveLot = resolveTradeLot(currentBar.close, sl);
 
-          const triggerReasonShort = `Sweep Sell SL @ $${sellSweepLevel} (Upper Wick ${(upperWickRatio * 100).toFixed(1)}% ≥ ${(effectiveWickRatio * 100).toFixed(0)}%) + ADX ${round2(currentADX)}${fvgMatch ? " + FVG Imbalance" : ""}${enableTrendFilter ? (!isUptrend ? " + Trend Rally" : " + Counter-Exhaustion") : ""}`;
+            const triggerReasonShort = `Sweep Sell SL @ $${sellSweepLevel} (Upper Wick ${(upperWickRatio * 100).toFixed(1)}% ≥ ${(effectiveWickRatio * 100).toFixed(0)}%) + ADX ${round2(currentADX)}${fvgMatch ? " + FVG Imbalance" : ""}${enableTrendFilter ? (!isUptrend ? " + Trend Rally" : " + Counter-Exhaustion") : ""}`;
 
-          activePos = {
-            trade_id: Date.now() + Math.floor(Math.random() * 1000),
-            symbol,
-            side: "SHORT",
-            entry_time: currentBar.time,
-            entry_index: currentIndex,
-            entry_px: fmtPrice(currentBar.close),
-            sl_px: fmtPrice(sl),
-            tp_px: fmtPrice(finalTP),
-            confluence_score: evaluation.score,
-            swept_pool_price: sellSweepLevel,
-            setup_type: !isUptrend
-              ? `TREND_RALLY_SELL [${profile.category}]`
-              : `COUNTER_EXHAUSTION_SELL [${profile.category}]`,
-            lot_size: lotSize,
-            trigger_category: "LIQUIDITY_SWEEP",
-            trigger_reason: triggerReasonShort,
-          };
+            activePos = {
+              trade_id: Date.now() + Math.floor(Math.random() * 1000),
+              symbol,
+              side: "SHORT",
+              entry_time: currentBar.time,
+              entry_index: currentIndex,
+              entry_px: fmtPrice(currentBar.close),
+              sl_px: fmtPrice(sl),
+              tp_px: fmtPrice(finalTP),
+              confluence_score: evaluation.score,
+              swept_pool_price: sellSweepLevel,
+              setup_type: !isUptrend
+                ? `TREND_RALLY_SELL [${profile.category}]`
+                : `COUNTER_EXHAUSTION_SELL [${profile.category}]`,
+              lot_size: effectiveLot,
+              trigger_category: "LIQUIDITY_SWEEP",
+              trigger_reason: triggerReasonShort,
+            };
 
-          const pool = activePools.find((p) => p.pool_type === "SELL_SL");
-          if (pool) pool.status = "SWEPT";
+            const pool = activePools.find((p) => p.pool_type === "SELL_SL");
+            if (pool) pool.status = "SWEPT";
 
-          alertMessage = `LIQUIDITY SWEEP ENTRY! SHORT @ $${activePos.entry_px} | Confluence: ${evaluation.score}/100 | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ADX: ${round2(currentADX)} | ${profile.category}${fvgMatch ? " + FVG" : ""}`;
+            alertMessage = `LIQUIDITY SWEEP ENTRY! SHORT @ $${activePos.entry_px} | Confluence: ${evaluation.score}/100 | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | Lot: ${effectiveLot}${useDynamicLot ? ` (Auto Risk ${riskPerTradePct}%)` : ""} | ADX: ${round2(currentADX)} | ${profile.category}${fvgMatch ? " + FVG" : ""}`;
+          }
         }
       }
     }
@@ -631,24 +718,29 @@ export function stepReplaySimulation(
         }
 
         if (allowChannelTrade) {
-          activePos = {
-            trade_id: Date.now() + Math.floor(Math.random() * 1000),
-            symbol,
-            side: "LONG",
-            entry_time: currentBar.time,
-            entry_index: currentIndex,
-            entry_px: channelEval.entry_px,
-            sl_px: channelEval.sl_px,
-            tp_px: channelEval.tp_px,
-            confluence_score: channelSignal.includes("BREAK") ? 88 : 84,
-            swept_pool_price: channelEval.channel?.lower_price || currentBar.close,
-            setup_type: channelEval.setup_type,
-            lot_size: lotSize,
-            trigger_category: "PARALLEL_CHANNEL",
-            trigger_reason: triggerReasonChannel,
-          };
+          if (isCoolingDown) {
+            alertMessage = `⏳ [JEDA COOLDOWN] Sinyal ${channelEval.setup_type} dilewati. Menunggu ${cooldownRemaining} bar jeda setelah Stop Loss.`;
+          } else {
+            const effectiveLot = resolveTradeLot(channelEval.entry_px, channelEval.sl_px);
+            activePos = {
+              trade_id: Date.now() + Math.floor(Math.random() * 1000),
+              symbol,
+              side: "LONG",
+              entry_time: currentBar.time,
+              entry_index: currentIndex,
+              entry_px: channelEval.entry_px,
+              sl_px: channelEval.sl_px,
+              tp_px: channelEval.tp_px,
+              confluence_score: channelSignal.includes("BREAK") ? 88 : 84,
+              swept_pool_price: channelEval.channel?.lower_price || currentBar.close,
+              setup_type: channelEval.setup_type,
+              lot_size: effectiveLot,
+              trigger_category: "PARALLEL_CHANNEL",
+              trigger_reason: triggerReasonChannel,
+            };
 
-          alertMessage = `PARALLEL CHANNEL ENTRY! ${channelEval.setup_type} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ${channelEval.notes}`;
+            alertMessage = `PARALLEL CHANNEL ENTRY! ${channelEval.setup_type} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | Lot: ${effectiveLot}${useDynamicLot ? ` (Auto Risk ${riskPerTradePct}%)` : ""} | ${channelEval.notes}`;
+          }
         }
       } else if (channelSignal === "CHANNEL_BOUNCE_SELL" || channelSignal === "CHANNEL_BREAK_RETEST_SELL") {
         if (directionFilter === "SHORT" || directionFilter === "ALL") {
@@ -658,24 +750,29 @@ export function stepReplaySimulation(
         }
 
         if (allowChannelTrade) {
-          activePos = {
-            trade_id: Date.now() + Math.floor(Math.random() * 1000),
-            symbol,
-            side: "SHORT",
-            entry_time: currentBar.time,
-            entry_index: currentIndex,
-            entry_px: channelEval.entry_px,
-            sl_px: channelEval.sl_px,
-            tp_px: channelEval.tp_px,
-            confluence_score: channelSignal.includes("BREAK") ? 88 : 84,
-            swept_pool_price: channelEval.channel?.upper_price || currentBar.close,
-            setup_type: channelEval.setup_type,
-            lot_size: lotSize,
-            trigger_category: "PARALLEL_CHANNEL",
-            trigger_reason: triggerReasonChannel,
-          };
+          if (isCoolingDown) {
+            alertMessage = `⏳ [JEDA COOLDOWN] Sinyal ${channelEval.setup_type} dilewati. Menunggu ${cooldownRemaining} bar jeda setelah Stop Loss.`;
+          } else {
+            const effectiveLot = resolveTradeLot(channelEval.entry_px, channelEval.sl_px);
+            activePos = {
+              trade_id: Date.now() + Math.floor(Math.random() * 1000),
+              symbol,
+              side: "SHORT",
+              entry_time: currentBar.time,
+              entry_index: currentIndex,
+              entry_px: channelEval.entry_px,
+              sl_px: channelEval.sl_px,
+              tp_px: channelEval.tp_px,
+              confluence_score: channelSignal.includes("BREAK") ? 88 : 84,
+              swept_pool_price: channelEval.channel?.upper_price || currentBar.close,
+              setup_type: channelEval.setup_type,
+              lot_size: effectiveLot,
+              trigger_category: "PARALLEL_CHANNEL",
+              trigger_reason: triggerReasonChannel,
+            };
 
-          alertMessage = `PARALLEL CHANNEL ENTRY! ${channelEval.setup_type} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ${channelEval.notes}`;
+            alertMessage = `PARALLEL CHANNEL ENTRY! ${channelEval.setup_type} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | Lot: ${effectiveLot}${useDynamicLot ? ` (Auto Risk ${riskPerTradePct}%)` : ""} | ${channelEval.notes}`;
+          }
         }
       }
     }
@@ -695,6 +792,7 @@ export function stepReplaySimulation(
       activeChannel,
       {
         riskRewardTarget: effectiveRR,
+        atrMultiplierSL: effectiveAtrMult,
       }
     );
 
@@ -707,26 +805,31 @@ export function stepReplaySimulation(
       }
 
       if (allowRunner) {
-        const triggerReasonRunner = `Trend Runner Continuation: ${runnerSignal.setup_type} (ADX: ${round2(currentADX)} | ${runnerSignal.notes})`;
+        if (isCoolingDown) {
+          alertMessage = `⏳ [JEDA COOLDOWN] Sinyal Trend Runner dilewati. Menunggu ${cooldownRemaining} bar jeda setelah Stop Loss.`;
+        } else {
+          const triggerReasonRunner = `Trend Runner Continuation: ${runnerSignal.setup_type} (ADX: ${round2(currentADX)} | ${runnerSignal.notes})`;
+          const effectiveLot = resolveTradeLot(runnerSignal.entry_px, runnerSignal.sl_px);
 
-        activePos = {
-          trade_id: Date.now() + Math.floor(Math.random() * 1000),
-          symbol,
-          side: runnerSignal.side,
-          entry_time: currentBar.time,
-          entry_index: currentIndex,
-          entry_px: fmtPrice(runnerSignal.entry_px),
-          sl_px: fmtPrice(runnerSignal.sl_px),
-          tp_px: fmtPrice(runnerSignal.tp_px),
-          confluence_score: runnerSignal.confluence_score,
-          swept_pool_price: runnerSignal.side === "LONG" ? (lastLow?.price || currentBar.close) : (lastHigh?.price || currentBar.close),
-          setup_type: runnerSignal.setup_type,
-          lot_size: lotSize,
-          trigger_category: "TREND_RUNNER",
-          trigger_reason: triggerReasonRunner,
-        };
+          activePos = {
+            trade_id: Date.now() + Math.floor(Math.random() * 1000),
+            symbol,
+            side: runnerSignal.side,
+            entry_time: currentBar.time,
+            entry_index: currentIndex,
+            entry_px: fmtPrice(runnerSignal.entry_px),
+            sl_px: fmtPrice(runnerSignal.sl_px),
+            tp_px: fmtPrice(runnerSignal.tp_px),
+            confluence_score: runnerSignal.confluence_score,
+            swept_pool_price: runnerSignal.side === "LONG" ? (lastLow?.price || currentBar.close) : (lastHigh?.price || currentBar.close),
+            setup_type: runnerSignal.setup_type,
+            lot_size: effectiveLot,
+            trigger_category: "TREND_RUNNER",
+            trigger_reason: triggerReasonRunner,
+          };
 
-        alertMessage = `🏃 TREND RUNNER ENTRY! ${runnerSignal.setup_type} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ${runnerSignal.notes}`;
+          alertMessage = `🏃 TREND RUNNER ENTRY! ${runnerSignal.setup_type} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | Lot: ${effectiveLot}${useDynamicLot ? ` (Auto Risk ${riskPerTradePct}%)` : ""} | ${runnerSignal.notes}`;
+        }
       }
     }
   }
@@ -742,6 +845,7 @@ export function stepReplaySimulation(
         {
           enableDoubleTopBottom,
           doubleTopBottomTolerance,
+          atrBufferMultiplier: effectiveAtrMult,
         }
       )
     : null;
@@ -764,40 +868,46 @@ export function stepReplaySimulation(
       }
 
       if (allowPattern) {
-        const triggerCategory: TriggerCategory = isDoubleTopBottom
-          ? "DOUBLE_TOP_BOTTOM"
-          : "CHART_PATTERN";
+        if (isCoolingDown) {
+          alertMessage = `⏳ [JEDA COOLDOWN] Sinyal Pola ${detectedPattern.name} dilewati. Menunggu ${cooldownRemaining} bar jeda setelah Stop Loss.`;
+        } else {
+          const triggerCategory: TriggerCategory = isDoubleTopBottom
+            ? "DOUBLE_TOP_BOTTOM"
+            : "CHART_PATTERN";
 
-        const setupType = isDoubleTopBottom
-          ? (detectedPattern.id === "BEARISH_DOUBLE_TOP" ? "DOUBLE_TOP_M_BREAKOUT" : "DOUBLE_BOTTOM_W_BREAKOUT")
-          : `PATTERN_${detectedPattern.id}`;
+          const setupType = isDoubleTopBottom
+            ? (detectedPattern.id === "BEARISH_DOUBLE_TOP" ? "DOUBLE_TOP_M_BREAKOUT" : "DOUBLE_BOTTOM_W_BREAKOUT")
+            : `PATTERN_${detectedPattern.id}`;
 
-        const triggerReasonPattern = isDoubleTopBottom
-          ? (detectedPattern.id === "BEARISH_DOUBLE_TOP"
-              ? `Double Top (M) Reversal: Breakdown Neckline $${detectedPattern.neckline.toFixed(2)} | Target: $${detectedPattern.target_price.toFixed(2)} | ${detectedPattern.notes}`
-              : `Double Bottom (W) Reversal: Breakout Neckline $${detectedPattern.neckline.toFixed(2)} | Target: $${detectedPattern.target_price.toFixed(2)} | ${detectedPattern.notes}`)
-          : `${detectedPattern.name} (${detectedPattern.category}) Breakout: Neckline $${detectedPattern.neckline.toFixed(2)} | Target: $${detectedPattern.target_price.toFixed(2)} | ${detectedPattern.notes}`;
+          const triggerReasonPattern = isDoubleTopBottom
+            ? (detectedPattern.id === "BEARISH_DOUBLE_TOP"
+                ? `Double Top (M) Reversal: Breakdown Neckline $${detectedPattern.neckline.toFixed(2)} | Target: $${detectedPattern.target_price.toFixed(2)} | ${detectedPattern.notes}`
+                : `Double Bottom (W) Reversal: Breakout Neckline $${detectedPattern.neckline.toFixed(2)} | Target: $${detectedPattern.target_price.toFixed(2)} | ${detectedPattern.notes}`)
+            : `${detectedPattern.name} (${detectedPattern.category}) Breakout: Neckline $${detectedPattern.neckline.toFixed(2)} | Target: $${detectedPattern.target_price.toFixed(2)} | ${detectedPattern.notes}`;
 
-        activePos = {
-          trade_id: Date.now() + Math.floor(Math.random() * 1000),
-          symbol,
-          side: detectedPattern.bias === "BULLISH" ? "LONG" : "SHORT",
-          entry_time: currentBar.time,
-          entry_index: currentIndex,
-          entry_px: fmtPrice(currentBar.close),
-          sl_px: fmtPrice(detectedPattern.stop_loss),
-          tp_px: fmtPrice(detectedPattern.target_price),
-          confluence_score: detectedPattern.confidence,
-          swept_pool_price: detectedPattern.neckline,
-          setup_type: setupType,
-          lot_size: lotSize,
-          trigger_category: triggerCategory,
-          trigger_reason: triggerReasonPattern,
-        };
+          const effectiveLot = resolveTradeLot(currentBar.close, detectedPattern.stop_loss);
 
-        alertMessage = isDoubleTopBottom
-          ? `📐 POLA PEMBALIKAN ${detectedPattern.name.toUpperCase()}! @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ${detectedPattern.notes}`
-          : `📐 POLA CHART BREAKOUT! ${detectedPattern.name} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | ${detectedPattern.notes}`;
+          activePos = {
+            trade_id: Date.now() + Math.floor(Math.random() * 1000),
+            symbol,
+            side: detectedPattern.bias === "BULLISH" ? "LONG" : "SHORT",
+            entry_time: currentBar.time,
+            entry_index: currentIndex,
+            entry_px: fmtPrice(currentBar.close),
+            sl_px: fmtPrice(detectedPattern.stop_loss),
+            tp_px: fmtPrice(detectedPattern.target_price),
+            confluence_score: detectedPattern.confidence,
+            swept_pool_price: detectedPattern.neckline,
+            setup_type: setupType,
+            lot_size: effectiveLot,
+            trigger_category: triggerCategory,
+            trigger_reason: triggerReasonPattern,
+          };
+
+          alertMessage = isDoubleTopBottom
+            ? `📐 POLA PEMBALIKAN ${detectedPattern.name.toUpperCase()}! @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | Lot: ${effectiveLot}${useDynamicLot ? ` (Auto Risk ${riskPerTradePct}%)` : ""} | ${detectedPattern.notes}`
+            : `📐 POLA CHART BREAKOUT! ${detectedPattern.name} @ $${activePos.entry_px} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | Lot: ${effectiveLot}${useDynamicLot ? ` (Auto Risk ${riskPerTradePct}%)` : ""} | ${detectedPattern.notes}`;
+        }
       }
     }
   }
@@ -815,6 +925,8 @@ export function stepReplaySimulation(
     adxValue: round2(currentADX),
     currentBalance: runningBalance,
     isLiquidated: runningBalance <= 0,
+    lastLossIndex: updatedLossIndex,
+    cooldownRemainingBars: cooldownRemaining,
   };
 }
 
@@ -859,6 +971,7 @@ export function runFullAutomatedBacktest(
   let runningBalance = initialCapital;
   let isLiquidated = runningBalance <= 0;
   let liquidationBar: number | null = null;
+  let lastLossBar: number | null = null;
 
   const startBar = Math.max(10, Math.min(25, Math.floor(candles.length * 0.15)));
 
@@ -882,8 +995,14 @@ export function runFullAutomatedBacktest(
       runningBalance,
       lotSize,
       configOrEnableParallel,
-      channelLookback
+      channelLookback,
+      lastLossBar
     );
+
+    if (result.lastLossIndex !== undefined) {
+      lastLossBar = result.lastLossIndex;
+    }
+
     if (result.closedTrade) {
       trades.push(result.closedTrade);
       totalConfluence += result.closedTrade.confluence_score;

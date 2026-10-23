@@ -86,6 +86,13 @@
       "owner_role": "quant-engineer",
       "status": "done",
       "rework_iteration_count": 0
+    },
+    {
+      "id": "T-12",
+      "task": "Anti-Margin Call & Institutional Risk Protections: Kalibrasi buffer Stop Loss (0.50x ATR), Jeda Cooldown Bar setelah loss untuk eliminasi overtrading, dan Dynamic Lot Sizing Calculator (Auto Risk 1%-2% per trade)",
+      "owner_role": "quant-engineer",
+      "status": "done",
+      "rework_iteration_count": 0
     }
   ],
   "established_constraints": [
