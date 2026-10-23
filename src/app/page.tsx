@@ -25,6 +25,7 @@ import {
   Flame,
   BarChart3,
   Check,
+  Split,
 } from "lucide-react";
 import type { CandleData, LiquidityPool } from "@/components/LightweightChart";
 import {
@@ -235,7 +236,9 @@ function generateCandles(basePrice: number, count: number = 60): CandleData[] {
 export default function TerminalHome() {
   const [selectedSymbol, setSelectedSymbol] = useState("XAUUSD");
   const [timeframe, setTimeframe] = useState("1D");
-  const [chartMode, setChartMode] = useState<"quant" | "tradingview" | "dexscreener">("quant");
+  const [chartMode, setChartMode] = useState<"quant" | "tradingview" | "split" | "dexscreener">("quant");
+  const [isLiveForwardSim, setIsLiveForwardSim] = useState(false);
+  const [chartHeight, setChartHeight] = useState<number>(280);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>(DEFAULT_WATCHLIST);
   const [fullCandles, setFullCandles] = useState<CandleData[]>([]);
   const [pools, setPools] = useState<LiquidityPool[]>([]);
@@ -680,6 +683,159 @@ export default function TerminalHome() {
     return () => clearInterval(timer);
   }, [isPlaying, replayIndex, fullCandles, playSpeed, activePosition, directionFilter, settings, currentBalance, isLiquidated, dummyLotSize]);
 
+  // Real-Time Live Forward Simulation Engine (Executes live ticks as market moves)
+  useEffect(() => {
+    if (!isLiveForwardSim || !liveTick?.price) return;
+    if (isLiquidated || currentBalance <= 0) {
+      setIsLiveForwardSim(false);
+      return;
+    }
+
+    const currentPx = liveTick.price;
+
+    // 1. If an active position exists, evaluate SL & TP hits in real time on every live tick
+    if (activePosition) {
+      let isClosed = false;
+      let result: "WIN" | "LOSS" = "WIN";
+      let exitPx = currentPx;
+
+      if (activePosition.side === "LONG") {
+        if (currentPx >= activePosition.tp_px) {
+          isClosed = true;
+          result = "WIN";
+          exitPx = activePosition.tp_px;
+        } else if (currentPx <= activePosition.sl_px) {
+          isClosed = true;
+          result = "LOSS";
+          exitPx = activePosition.sl_px;
+        }
+      } else {
+        // SHORT
+        if (currentPx <= activePosition.tp_px) {
+          isClosed = true;
+          result = "WIN";
+          exitPx = activePosition.tp_px;
+        } else if (currentPx >= activePosition.sl_px) {
+          isClosed = true;
+          result = "LOSS";
+          exitPx = activePosition.sl_px;
+        }
+      }
+
+      if (isClosed) {
+        const effectiveLot = activePosition.lot_size || dummyLotSize;
+        const pnl = calculateTradePnL(
+          activePosition.symbol,
+          activePosition.side,
+          activePosition.entry_px,
+          exitPx,
+          effectiveLot
+        );
+
+        const newBal = Math.max(0, parseFloat((currentBalance + pnl.pnlUsd).toFixed(2)));
+        setCurrentBalance(newBal);
+
+        const closedTrade: ReplayTrade = {
+          trade_id: Date.now(),
+          asset: activePosition.symbol,
+          timeframe,
+          side: activePosition.side,
+          entry_time: activePosition.entry_time || new Date().toISOString(),
+          entry_px: activePosition.entry_px,
+          exit_time: new Date().toISOString(),
+          exit_px: exitPx,
+          sl_px: activePosition.sl_px,
+          tp_px: activePosition.tp_px,
+          result,
+          pnl_pct: pnl.pnlPct,
+          pnl_usd: pnl.pnlUsd,
+          lot_size: effectiveLot,
+          balance_after: newBal,
+          confluence_score: activePosition.confluence_score,
+          setup_type: activePosition.setup_type,
+          trigger_category: activePosition.trigger_category || "LIQUIDITY_SWEEP",
+          trigger_reason: activePosition.trigger_reason || activePosition.setup_type,
+          notes:
+            result === "WIN"
+              ? `Take Profit hit di $${exitPx} (+${pnl.pnlPct}%, +$${pnl.pnlUsd})`
+              : `Stop Loss tersentuh di $${exitPx} (${pnl.pnlPct}%, $${pnl.pnlUsd})`,
+        };
+
+        setSimulationTrades((prev) => [closedTrade, ...prev]);
+        setActivePosition(null);
+
+        if (settings.soundEnabled) {
+          if (result === "WIN") terminalAudio.playWinChime();
+          else terminalAudio.playLossChime();
+        }
+
+        setReplayAlert(
+          `${result === "WIN" ? "🎯 TAKE PROFIT TERCAPAI!" : "🛑 STOP LOSS TERSENTUH!"} [${activePosition.side}] di $${exitPx} | PnL: ${pnl.pnlUsd >= 0 ? "+" : ""}$${pnl.pnlUsd.toFixed(2)} (${pnl.pnlPct.toFixed(2)}%). Saldo: $${newBal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        );
+
+        if (newBal <= 0) {
+          setIsLiquidated(true);
+          setIsLiveForwardSim(false);
+          setReplayAlert("💀 MODAL HABIS ($0.00)! Akun terkena Margin Call/Likuidasi pada Live Forward Simulation.");
+        }
+      }
+      return;
+    }
+
+    // 2. If NO active position, evaluate entry trigger on live tick + recent candles
+    if (!activePosition && fullCandles.length >= 10) {
+      const lastBar = fullCandles[fullCandles.length - 1];
+      const liveCandles = [
+        ...fullCandles.slice(0, -1),
+        {
+          ...lastBar,
+          high: Math.max(lastBar.high, currentPx),
+          low: Math.min(lastBar.low, currentPx),
+          close: currentPx,
+        },
+      ];
+
+      const stepRes = stepReplaySimulation(
+        liveCandles,
+        liveCandles.length - 1,
+        null,
+        activeAsset.symbol,
+        timeframe,
+        directionFilter,
+        settings.minWickRatio,
+        dummyRR,
+        currentBalance,
+        dummyLotSize,
+        schemaConfig
+      );
+
+      if (stepRes.newPosition) {
+        setActivePosition(stepRes.newPosition);
+        if (settings.soundEnabled) {
+          terminalAudio.playSweepAlert();
+        }
+        setReplayAlert(
+          `⚡ LIVE SIGNAL ENTRY [${stepRes.newPosition.side}] @ $${stepRes.newPosition.entry_px} (SL: $${stepRes.newPosition.sl_px} | TP: $${stepRes.newPosition.tp_px} | RR 1:${dummyRR.toFixed(1)}). Alasan: ${stepRes.newPosition.setup_type}`
+        );
+      }
+    }
+  }, [
+    liveTick?.price,
+    isLiveForwardSim,
+    activePosition,
+    currentBalance,
+    isLiquidated,
+    fullCandles,
+    directionFilter,
+    dummyRR,
+    dummyLotSize,
+    schemaConfig,
+    settings.soundEnabled,
+    settings.minWickRatio,
+    timeframe,
+    activeAsset.symbol,
+  ]);
+
   // Dynamic KPI Metrics derived from simulationTrades
   const winningTrades = simulationTrades.filter((t) => t.result === "WIN");
   const losingTrades = simulationTrades.filter((t) => t.result === "LOSS");
@@ -742,7 +898,12 @@ export default function TerminalHome() {
   // Visible candles sliced up to current replayIndex
   const visibleCandles = fullCandles.slice(0, Math.min(replayIndex + 1, fullCandles.length));
   const currentBar = visibleCandles[visibleCandles.length - 1];
-  const currentPrice = currentBar ? currentBar.close : activeAsset.last_price;
+  const currentPrice =
+    ((isLiveForwardSim || chartMode === "tradingview" || chartMode === "split") && liveTick?.price)
+      ? liveTick.price
+      : currentBar
+      ? currentBar.close
+      : activeAsset.last_price;
 
   // Unrealized PnL of active position in % and USD
   const activeTradePnL = activePosition
@@ -922,14 +1083,27 @@ export default function TerminalHome() {
                 </button>
                 <button
                   onClick={() => setChartMode("tradingview")}
-                  className={`rounded px-3 py-1 font-mono text-xs font-bold transition ${
+                  className={`flex items-center gap-1.5 rounded px-3 py-1 font-mono text-xs font-bold transition ${
                     chartMode === "tradingview"
                       ? "bg-[#38BDF8]/20 text-[#38BDF8] border border-[#38BDF8]/60 shadow-[0_0_10px_rgba(56,189,248,0.2)]"
                       : "text-[#8E9BAE] hover:text-[#E2E8F0]"
                   }`}
-                  title="Official TradingView Advanced Chart (OANDA Forex & Binance Crypto Live Data)"
+                  title="Official TradingView Advanced Chart with Synchronized Real-Time Simulation & Active Trade HUD"
                 >
-                  TRADINGVIEW PRO (LIVE)
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#38BDF8] animate-ping" />
+                  <span>TRADINGVIEW PRO (LIVE)</span>
+                </button>
+                <button
+                  onClick={() => setChartMode("split")}
+                  className={`flex items-center gap-1.5 rounded px-3 py-1 font-mono text-xs font-bold transition ${
+                    chartMode === "split"
+                      ? "bg-[#F59E0B]/20 text-[#F59E0B] border border-[#F59E0B]/60 shadow-[0_0_10px_rgba(245,158,11,0.25)]"
+                      : "text-[#8E9BAE] hover:text-[#E2E8F0]"
+                  }`}
+                  title="Split / Dual View: TradingView Official Live Chart + Quantitative SMC Engine Side-by-Side"
+                >
+                  <Split className="h-3.5 w-3.5 text-[#F59E0B]" />
+                  <span>SPLIT DUAL (TV + SMC)</span>
                 </button>
                 <button
                   onClick={() => setChartMode("dexscreener")}
@@ -968,6 +1142,29 @@ export default function TerminalHome() {
                     FEED AKTIF ({fullCandles.length} BARS)
                   </span>
                 )}
+
+                {/* Chart Height Preset Selector */}
+                <div className="flex items-center gap-1 border-l border-[#1F2430] pl-3">
+                  <span className="text-[#8E9BAE] text-[10px]">TINGGI:</span>
+                  {[
+                    { label: "280px (Kecil)", val: 280 },
+                    { label: "360px", val: 360 },
+                    { label: "500px", val: 500 },
+                  ].map((h) => (
+                    <button
+                      key={h.val}
+                      onClick={() => setChartHeight(h.val)}
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-mono transition ${
+                        chartHeight === h.val
+                          ? "bg-[#38BDF8]/20 text-[#38BDF8] border border-[#38BDF8]/60 font-bold"
+                          : "bg-[#141824] text-[#64748B] border border-[#1F2430] hover:text-[#CBD5E1]"
+                      }`}
+                      title={`Ubah tinggi chart ke ${h.val}px`}
+                    >
+                      {h.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -1079,17 +1276,47 @@ export default function TerminalHome() {
           </div>
 
           {/* Bar Replay Simulator Controls Bar (TradingView Style) */}
-          {chartMode === "quant" && (
+          {(chartMode === "quant" || chartMode === "tradingview" || chartMode === "split") && (
             <div className="rounded border border-[#1F2430] bg-[#0E1118] p-3 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="flex items-center gap-1.5 font-mono text-xs font-bold text-[#38BDF8]">
                     <span className="h-2 w-2 rounded-full bg-[#38BDF8] animate-ping" />
-                    BAR REPLAY CONTROLLER:
+                    SIMULASI & REPLAY:
                   </span>
+
+                  {/* Live Forward Simulation Toggle */}
+                  <button
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setIsLiveForwardSim((prev) => !prev);
+                      if (!isLiveForwardSim) {
+                        setReplayAlert(
+                          `🟢 SIMULASI LIVE REALTIME AKTIF! Engine berjalan langsung memantau pergerakan harga real-time live tick. Trade akan dieksekusi otomatis pada market live.`
+                        );
+                      } else {
+                        setReplayAlert(`⏸️ Simulasi Live Realtime dinonaktifkan.`);
+                      }
+                    }}
+                    className={`flex items-center gap-1.5 rounded border px-2.5 py-0.5 font-mono text-[11px] font-bold transition ${
+                      isLiveForwardSim
+                        ? "border-[#10B981] bg-[#10B981]/20 text-[#10B981] shadow-[0_0_10px_rgba(16,185,129,0.3)] animate-pulse"
+                        : "border-[#38BDF8]/50 bg-[#38BDF8]/10 text-[#38BDF8] hover:bg-[#38BDF8]/20"
+                    }`}
+                    title="Jalankan simulasi otomatis pada harga real-time live trading tick"
+                  >
+                    <span className={`h-1.5 w-1.5 rounded-full ${isLiveForwardSim ? "bg-[#10B981] animate-ping" : "bg-[#38BDF8]"}`} />
+                    <span>{isLiveForwardSim ? "● SIMULASI LIVE (AKTIF)" : "▶ AKTIFKAN SIMULASI LIVE"}</span>
+                  </button>
+
                   <span className="rounded bg-[#141824] px-2 py-0.5 font-mono text-[11px] text-[#94A3B8] border border-[#1F2430]">
                     BAR {replayIndex + 1} / {fullCandles.length} ({formatBarTime(currentBar?.time)})
                   </span>
+                  {(chartMode === "tradingview" || chartMode === "split") && (
+                    <span className="rounded bg-[#38BDF8]/15 border border-[#38BDF8]/40 px-2 py-0.5 font-mono text-[10px] font-bold text-[#38BDF8]">
+                      ⚡ SYNCED TRADINGVIEW LIVE
+                    </span>
+                  )}
                   {replayIndex === fullCandles.length - 1 ? (
                     <span className="rounded bg-[#10B981]/20 border border-[#10B981]/50 px-2 py-0.5 font-mono text-[10px] font-bold text-[#10B981]">
                       ● POSISI TERKINI (NOW: ${currentPrice})
@@ -1861,9 +2088,60 @@ export default function TerminalHome() {
 
           {/* Interactive Chart Component */}
           {chartMode === "tradingview" ? (
-            <TradingViewWidget symbol={activeAsset.symbol} timeframe={timeframe} height={520} />
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-[#1F2430] bg-[#0E1118] px-3 py-1.5 text-xs font-mono">
+                <div className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-[#38BDF8] animate-ping" />
+                  <span className="font-bold text-[#38BDF8]">TRADINGVIEW PRO (LIVE)</span>
+                  <span className="text-[#64748B]">•</span>
+                  <span className="text-[#94A3B8] text-[11px]">OANDA & Binance Real-Time Feed</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="rounded bg-[#10B981]/15 border border-[#10B981]/40 px-2 py-0.5 text-[10px] font-bold text-[#10B981]">
+                    ● Tersinkronisasi Simulasi & Jurnal
+                  </span>
+                </div>
+              </div>
+              <TradingViewWidget symbol={activeAsset.symbol} timeframe={timeframe} height={chartHeight} />
+            </div>
+          ) : chartMode === "split" ? (
+            <div className="space-y-2">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {/* Left: TradingView Pro Live */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between rounded-t border border-[#1F2430] bg-[#0E1118] px-3 py-1 font-mono text-[11px] text-[#38BDF8]">
+                    <span className="font-bold flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[#38BDF8] animate-ping" />
+                      1. TRADINGVIEW PRO (OFFICIAL LIVE)
+                    </span>
+                    <span className="text-[#64748B]">{activeAsset.symbol} • {timeframe}</span>
+                  </div>
+                  <TradingViewWidget symbol={activeAsset.symbol} timeframe={timeframe} height={chartHeight} />
+                </div>
+                {/* Right: Quant Replay with SMC Overlays */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between rounded-t border border-[#1F2430] bg-[#0E1118] px-3 py-1 font-mono text-[11px] text-[#10B981]">
+                    <span className="font-bold flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[#10B981] animate-pulse" />
+                      2. QUANT SMC REPLAY (POOLS & CHANNEL)
+                    </span>
+                    <span className="text-[#64748B]">{pools.length} Pools • {visibleCandles.length} Bars</span>
+                  </div>
+                  <LightweightChart
+                    symbol={activeAsset.symbol}
+                    timeframe={timeframe}
+                    candles={visibleCandles}
+                    pools={settings.enableLiquiditySweep ? pools : []}
+                    activePosition={activePosition}
+                    liveTickPrice={liveTick?.price}
+                    height={chartHeight}
+                    channel={settings.enableParallelChannel ? activeChannel : null}
+                  />
+                </div>
+              </div>
+            </div>
           ) : chartMode === "dexscreener" ? (
-            <DexScreenerWidget height={540} />
+            <DexScreenerWidget height={Math.max(380, chartHeight + 80)} />
           ) : (
             <LightweightChart
               symbol={activeAsset.symbol}
@@ -1872,7 +2150,7 @@ export default function TerminalHome() {
               pools={settings.enableLiquiditySweep ? pools : []}
               activePosition={activePosition}
               liveTickPrice={liveTick?.price}
-              height={520}
+              height={chartHeight}
               channel={settings.enableParallelChannel ? activeChannel : null}
             />
           )}

@@ -56,7 +56,7 @@ export default function LightweightChart({
   pools,
   activePosition = null,
   liveTickPrice = null,
-  height = 520,
+  height = 280,
   channel = null,
 }: LightweightChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);

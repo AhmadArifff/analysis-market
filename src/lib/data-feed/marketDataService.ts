@@ -179,14 +179,28 @@ async function fetchYahooCandles(
   let url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=${yInterval}`;
 
   if (startDate) {
-    const p1 = Math.floor(new Date(startDate).getTime() / 1000);
-    const p2 = endDate && endDate.toLowerCase() !== "now"
-      ? Math.floor(new Date(endDate).getTime() / 1000)
-      : Math.floor(Date.now() / 1000);
+    const isNow = !endDate || endDate.toLowerCase() === "now";
+    let p1 = Math.floor(new Date(startDate).getTime() / 1000);
+    const p2 = isNow
+      ? Math.floor(Date.now() / 1000)
+      : Math.floor(new Date(endDate).getTime() / 1000);
+
+    // Clamp p1 according to Yahoo Finance historical limits per interval to prevent HTTP 400 Bad Request
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (yInterval === "1m") {
+      const minP1 = nowSec - 6 * 86400; // max 7d for 1m
+      if (p1 < minP1) p1 = minP1;
+    } else if (["5m", "15m", "30m"].includes(yInterval)) {
+      const minP1 = nowSec - 58 * 86400; // max 60d for 5m-30m
+      if (p1 < minP1) p1 = minP1;
+    } else if (yInterval === "60m") {
+      const minP1 = nowSec - 700 * 86400; // max 730d for 1h
+      if (p1 < minP1) p1 = minP1;
+    }
+
     url += `&period1=${p1}&period2=${p2}`;
   } else {
-    // Yahoo has range limits per interval:
-    // 1m: max 7d, 5m/15m/30m: max 60d, 60m: max 730d, 1d/1wk/1mo: unlimited
+    // Yahoo default range per interval
     const defaultRange =
       yInterval === "1m" ? "5d" :
       ["5m", "15m", "30m"].includes(yInterval) ? "1mo" :
@@ -272,11 +286,19 @@ async function fetchGateioCandles(
 
   let url = `https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=${pair}&interval=${gInterval}&limit=1000`;
 
-  if (startDate) {
+  const isIntraday = ["1m", "5m", "15m", "30m", "45m", "1h", "4h"].includes(timeframe);
+  const isEndDateNow = !endDate || endDate.toLowerCase() === "now";
+
+  // Gate.io returns candles forward from `from`. If startDate is 2021 and timeframe is 1m,
+  // passing `from` will return 1000 candles from 2021 and NEVER reach today!
+  // Therefore: for intraday with 'now' as end, omit `from` so Gate.io returns the latest 1000 bars up to the current second!
+  if (startDate && !isEndDateNow) {
     const p1 = Math.floor(new Date(startDate).getTime() / 1000);
-    const p2 = endDate && endDate.toLowerCase() !== "now"
-      ? Math.floor(new Date(endDate).getTime() / 1000)
-      : Math.floor(Date.now() / 1000);
+    const p2 = Math.floor(new Date(endDate).getTime() / 1000);
+    url += `&from=${p1}&to=${p2}`;
+  } else if (startDate && isEndDateNow && !isIntraday) {
+    const p1 = Math.floor(new Date(startDate).getTime() / 1000);
+    const p2 = Math.floor(Date.now() / 1000);
     url += `&from=${p1}&to=${p2}`;
   }
 
@@ -335,6 +357,82 @@ async function fetchGateioCandles(
 
   const aggregated = factor > 1 ? aggregateCandles(candles, factor) : candles;
   return sortCandles(aggregated);
+}
+
+/**
+ * Fetch real-time candles from Binance Public API (Zero keys, ultra-fast & resilient)
+ */
+async function fetchBinanceCandles(
+  symbol: string,
+  timeframe: string = "1D",
+  limit: number = 500
+): Promise<RealCandle[]> {
+  const cleanSym = symbol.replace(/[^A-Z0-9]/g, "").toUpperCase();
+  const binanceSymbol = cleanSym.endsWith("USDT") ? cleanSym : `${cleanSym}USDT`;
+  const intervalMap: Record<string, string> = {
+    "1m": "1m",
+    "5m": "5m",
+    "15m": "15m",
+    "30m": "30m",
+    "45m": "15m",
+    "1h": "1h",
+    "4h": "4h",
+    "1D": "1d",
+    "1W": "1w",
+    "1M": "1M",
+  };
+  const bInterval = intervalMap[timeframe] || "1d";
+  const precision = getPrecision(cleanSym);
+
+  const url = `https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=${bInterval}&limit=${limit}`;
+
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; AnalysisMarket/1.0)" },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    throw new Error(`Binance HTTP ${res.status} for ${binanceSymbol}`);
+  }
+
+  const data = await res.json();
+  if (!Array.isArray(data)) {
+    throw new Error("Invalid Binance response");
+  }
+
+  const isDailyOrHigher = timeframe === "1D" || timeframe === "1W" || timeframe === "1M";
+  const candles: RealCandle[] = [];
+  const seenTimes = new Set<string>();
+
+  for (const bar of data) {
+    const timestampSec = Math.floor(bar[0] / 1000);
+    let timeVal: string | number;
+
+    if (isDailyOrHigher) {
+      const d = new Date(bar[0]);
+      const year = d.getUTCFullYear();
+      const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(d.getUTCDate()).padStart(2, "0");
+      timeVal = `${year}-${month}-${day}`;
+    } else {
+      timeVal = timestampSec;
+    }
+
+    const key = String(timeVal);
+    if (seenTimes.has(key)) continue;
+    seenTimes.add(key);
+
+    candles.push({
+      time: timeVal,
+      open: parseFloat(parseFloat(bar[1]).toFixed(precision)),
+      high: parseFloat(parseFloat(bar[2]).toFixed(precision)),
+      low: parseFloat(parseFloat(bar[3]).toFixed(precision)),
+      close: parseFloat(parseFloat(bar[4]).toFixed(precision)),
+      volume: parseFloat(parseFloat(bar[5]).toFixed(4)),
+    });
+  }
+
+  return sortCandles(candles);
 }
 
 /**
@@ -440,6 +538,16 @@ export async function getRealCandles(
       }
     }
 
+    // Priority 1b: Crypto symbols -> Binance public klines (ultra-fast, reliable zero-key API)
+    if (isCrypto && !isMultiYear) {
+      try {
+        const binanceData = await fetchBinanceCandles(cleanSymbol, timeframe);
+        if (binanceData.length > 0) return binanceData;
+      } catch (err) {
+        console.warn(`[DataFeed] Binance failed for ${symbol}:`, err);
+      }
+    }
+
     // Priority 2: Yahoo Finance (forex, multi-year crypto history, or Gate.io fallback)
     try {
       const yahooData = await fetchYahooCandles(symbol, timeframe, startDate, endDate);
@@ -461,8 +569,8 @@ export async function getRealCandles(
     // Priority 4: Fallback synthetic data (clearly anchored to realistic price)
     console.warn(`[DataFeed] ALL sources failed for ${symbol} ${timeframe}. Using fallback generator.`);
     const basePrices: Record<string, number> = {
-      XAUUSD: 3420.0,
-      BTCUSDT: 82800.0,
+      XAUUSD: 4194.8,
+      BTCUSDT: 81340.0,
       ETHUSDT: 1600.0,
       SOLUSDT: 170.0,
       BNBUSDT: 610.0,

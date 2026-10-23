@@ -34,7 +34,7 @@ interface TradingViewWidgetProps {
 function TradingViewWidgetComponent({
   symbol,
   timeframe = "1D",
-  height = 520,
+  height = 280,
 }: TradingViewWidgetProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
