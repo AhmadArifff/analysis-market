@@ -93,6 +93,13 @@
       "owner_role": "quant-engineer",
       "status": "done",
       "rework_iteration_count": 0
+    },
+    {
+      "id": "T-13",
+      "task": "Implementasi Indikator Precision Sniper [WillyAlgoTrader v2.1.0]: Dual EMA Crossover + Mandatory Momentum Gate + Confluence Score (Grade A+, A, B) + Adaptive Window Structure SL + Step Trailing Targets dan 1-Click Preset",
+      "owner_role": "quant-engineer",
+      "status": "done",
+      "rework_iteration_count": 0
     }
   ],
   "established_constraints": [

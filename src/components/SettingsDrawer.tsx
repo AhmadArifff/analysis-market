@@ -50,6 +50,13 @@ export interface StrategySettings {
   enableDoubleTopBottom: boolean; // 8. Skema Double Top & Double Bottom (M & W Reversals)
   doubleTopBottomTolerance: number; // Toleransi deviasi puncak/lembah (misal: 1.5%)
 
+  // 9. Precision Sniper [WillyAlgoTrader v2.1.0]
+  enablePrecisionSniper: boolean;
+  precisionSniperPreset: "Auto" | "Scalping" | "Aggressive" | "Default" | "Conservative" | "Swing" | "Crypto 24/7";
+  precisionSniperGradeFilter: "All" | "A+ and A" | "A+ Only";
+  precisionSniperMinScore: number;
+  precisionSniperHideC: boolean;
+
   // 20 Pola Karakteristik Chart Klasik Toggles
   enablePatternTrades: boolean; // Master toggle eksekusi breakout pola chart
   enabledPatterns: Record<ChartPatternId, boolean>; // Checklist per individual pola
@@ -86,6 +93,12 @@ export const DEFAULT_SETTINGS: StrategySettings = {
   enableTrendRunner: true,
   enableDoubleTopBottom: true,
   doubleTopBottomTolerance: 1.5,
+
+  enablePrecisionSniper: false,
+  precisionSniperPreset: "Auto",
+  precisionSniperGradeFilter: "All",
+  precisionSniperMinScore: 5,
+  precisionSniperHideC: true,
 
   enablePatternTrades: true,
   enabledPatterns: getDefaultEnabledPatterns(),
@@ -134,7 +147,7 @@ export default function SettingsDrawer({
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
-  const applyPreset = (preset: "SMC_CORE" | "TREND_RETEST" | "ALL_IN") => {
+  const applyPreset = (preset: "SMC_CORE" | "TREND_RETEST" | "PRECISION_SNIPER" | "ALL_IN") => {
     if (preset === "SMC_CORE") {
       const noneActive: Record<string, boolean> = {};
       for (const id of ALL_PATTERN_IDS) noneActive[id] = false;
@@ -149,6 +162,7 @@ export default function SettingsDrawer({
         enableParallelChannel: false,
         enableTrendRunner: true,
         enableDoubleTopBottom: false,
+        enablePrecisionSniper: false,
         enablePatternTrades: false,
         enabledPatterns: noneActive as any,
         confluenceThreshold: 80,
@@ -178,9 +192,35 @@ export default function SettingsDrawer({
         enableTrendRunner: true,
         enableDoubleTopBottom: true,
         doubleTopBottomTolerance: 1.5,
+        enablePrecisionSniper: false,
         enablePatternTrades: true,
         enabledPatterns: selective as any,
         confluenceThreshold: 80,
+        atrBufferMultiplier: 0.50,
+        cooldownBarsAfterLoss: 3,
+        useDynamicLot: true,
+      }));
+    } else if (preset === "PRECISION_SNIPER") {
+      const noneActive: Record<string, boolean> = {};
+      for (const id of ALL_PATTERN_IDS) noneActive[id] = false;
+
+      setForm((prev) => ({
+        ...prev,
+        enablePrecisionSniper: true,
+        precisionSniperPreset: "Auto",
+        precisionSniperGradeFilter: "A+ and A",
+        precisionSniperHideC: true,
+        precisionSniperMinScore: 5,
+        enableLiquiditySweep: false,
+        enableParallelChannel: false,
+        enableFVGConfluence: false,
+        enableKillzones: false,
+        enableTrendFilter: false,
+        enableVolumeFilter: false,
+        enableTrendRunner: false,
+        enableDoubleTopBottom: false,
+        enablePatternTrades: false,
+        enabledPatterns: noneActive as any,
         atrBufferMultiplier: 0.50,
         cooldownBarsAfterLoss: 3,
         useDynamicLot: true,
@@ -198,6 +238,7 @@ export default function SettingsDrawer({
         enableTrendRunner: true,
         enableDoubleTopBottom: true,
         doubleTopBottomTolerance: 1.5,
+        enablePrecisionSniper: true,
         enablePatternTrades: true,
         enabledPatterns: allActive,
         channelAnchorMode: "SWING_HIGHLOW",
@@ -529,12 +570,30 @@ export default function SettingsDrawer({
 
                   <button
                     type="button"
+                    onClick={() => applyPreset("PRECISION_SNIPER")}
+                    className="w-full flex items-center justify-between p-2 rounded bg-[#F59E0B]/15 hover:bg-[#F59E0B]/25 border border-[#F59E0B]/50 text-left transition group active:scale-[0.99]"
+                  >
+                    <div>
+                      <div className="text-[11px] font-extrabold text-[#F59E0B] flex items-center gap-1">
+                        <span>🎯</span> 3. PRECISION SNIPER STANDALONE [WillyAlgoTrader]
+                      </div>
+                      <div className="text-[9.5px] text-[#FDE68A] mt-0.5">
+                        Dual EMA Crossover + Momentum Gate + Confluence Score (Grade A+/A) &amp; Structure SL.
+                      </div>
+                    </div>
+                    <span className="rounded bg-[#F59E0B] text-[#090A0F] font-bold text-[9px] px-1.5 py-0.5 whitespace-nowrap ml-2">
+                      Sniper Mode
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => applyPreset("ALL_IN")}
                     className="w-full flex items-center justify-between p-2 rounded bg-[#1F2430]/60 hover:bg-[#1F2430] border border-[#334155] text-left transition active:scale-[0.99]"
                   >
                     <div>
                       <div className="text-[11px] font-bold text-[#E2E8F0] flex items-center gap-1">
-                        <span>🌐</span> 3. ALL-IN EXPLORATION (Semua Aktif)
+                        <span>🌐</span> 4. ALL-IN EXPLORATION (Semua Aktif)
                       </div>
                       <div className="text-[9.5px] text-[#64748B] mt-0.5">
                         Aktifkan seluruh 20 pola + sweep + kanal (Hanya untuk keperluan riset/benchmark).
@@ -708,6 +767,25 @@ export default function SettingsDrawer({
                       className="h-4 w-4 accent-[#EC4899] mt-0.5 cursor-pointer"
                     />
                   </label>
+
+                  {/* 9. Precision Sniper [WillyAlgoTrader v2.1.0] */}
+                  <label className="flex items-start justify-between gap-3 p-2 rounded border border-[#1F2430] hover:border-[#F59E0B]/50 cursor-pointer transition bg-[#0E1118]">
+                    <div>
+                      <div className="font-semibold text-[#E2E8F0] flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-[#F59E0B]"></span>
+                        9. Indikator Precision Sniper [WillyAlgoTrader v2.1.0]
+                      </div>
+                      <div className="text-[10px] text-[#64748B]">
+                        Dual EMA Cross + Mandatory Momentum + Multi-Factor Confluence (Grade A+, A, B) &amp; Adaptive Structure SL
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={form.enablePrecisionSniper}
+                      onChange={(e) => handleChange("enablePrecisionSniper", e.target.checked)}
+                      className="h-4 w-4 accent-[#F59E0B] mt-0.5 cursor-pointer"
+                    />
+                  </label>
                 </div>
               </div>
 
@@ -734,6 +812,65 @@ export default function SettingsDrawer({
                     <span className="text-[10px] text-[#64748B] mt-1 block">
                       Maksimal selisih persentase antara Puncak 1 dan Puncak 2 (Default: 1.5%).
                     </span>
+                  </div>
+                </div>
+              )}
+
+              {/* PENGATURAN PARAMETER PRECISION SNIPER */}
+              {form.enablePrecisionSniper && (
+                <div className="rounded border border-[#F59E0B]/30 bg-[#121622] p-3.5 space-y-3">
+                  <div className="border-b border-[#F59E0B]/20 pb-2">
+                    <div className="font-bold text-[#F59E0B] text-xs flex items-center gap-1.5">
+                      <span>🎯</span> PENGATURAN PRECISION SNIPER [WillyAlgoTrader]
+                    </div>
+                    <div className="text-[10px] text-[#8E9BAE]">
+                      Profil preset dinamis, filter grade evidence (A+, A), dan ambang batas minimum skor
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[#8E9BAE] block mb-1 text-[11px]">PRESET PROFIL</label>
+                      <select
+                        value={form.precisionSniperPreset}
+                        onChange={(e) => handleChange("precisionSniperPreset", e.target.value)}
+                        className="w-full rounded border border-[#1F2430] bg-[#0E1118] px-2.5 py-1.5 text-xs text-[#F8FAFC] focus:border-[#F59E0B] focus:outline-none"
+                      >
+                        <option value="Auto">Auto (Berdasarkan Timeframe)</option>
+                        <option value="Scalping">Scalping (EMA 5/13/34, SL 0.8x)</option>
+                        <option value="Default">Default (EMA 9/21/55, SL 1.5x)</option>
+                        <option value="Conservative">Conservative (EMA 12/26/89, SL 2.0x)</option>
+                        <option value="Aggressive">Aggressive (EMA 8/18/50, SL 1.2x)</option>
+                        <option value="Swing">Swing (EMA 13/34/89, SL 2.5x)</option>
+                        <option value="Crypto 24/7">Crypto 24/7 (EMA 9/21/55, SL 2.0x)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[#8E9BAE] block mb-1 text-[11px]">FILTER GRADE</label>
+                      <select
+                        value={form.precisionSniperGradeFilter}
+                        onChange={(e) => handleChange("precisionSniperGradeFilter", e.target.value)}
+                        className="w-full rounded border border-[#1F2430] bg-[#0E1118] px-2.5 py-1.5 text-xs text-[#F8FAFC] focus:border-[#F59E0B] focus:outline-none"
+                      >
+                        <option value="All">Semua Grade (A+, A, B)</option>
+                        <option value="A+ and A">Hanya A+ dan A (Akurasi Tinggi)</option>
+                        <option value="A+ Only">Hanya A+ (Paling Selektif)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1 border-t border-[#1F2430]">
+                    <div>
+                      <div className="text-[11px] font-semibold text-[#E2E8F0]">Sembunyikan Grade C (Hide C Noise)</div>
+                      <div className="text-[9.5px] text-[#64748B]">Wajib rasio bukti minimal ≥ 50% untuk eksekusi sinyal</div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={form.precisionSniperHideC}
+                      onChange={(e) => handleChange("precisionSniperHideC", e.target.checked)}
+                      className="h-4 w-4 accent-[#F59E0B] cursor-pointer"
+                    />
                   </div>
                 </div>
               )}

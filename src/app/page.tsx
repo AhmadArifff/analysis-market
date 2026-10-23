@@ -319,6 +319,11 @@ export default function TerminalHome() {
     enableTrendRunner: settings.enableTrendRunner ?? true,
     enableDoubleTopBottom: settings.enableDoubleTopBottom ?? true,
     doubleTopBottomTolerance: (settings.doubleTopBottomTolerance || 1.5) / 100,
+    enablePrecisionSniper: settings.enablePrecisionSniper ?? false,
+    precisionSniperPreset: settings.precisionSniperPreset ?? "Auto",
+    precisionSniperGradeFilter: settings.precisionSniperGradeFilter ?? "All",
+    precisionSniperMinScore: settings.precisionSniperMinScore ?? 5,
+    precisionSniperHideC: settings.precisionSniperHideC ?? true,
     enablePatternTrades: settings.enablePatternTrades ?? true,
     enabledPatterns: settings.enabledPatterns,
     channelLookback: settings.channelLookback ?? 25,
@@ -337,6 +342,11 @@ export default function TerminalHome() {
     settings.enableTrendRunner,
     settings.enableDoubleTopBottom,
     settings.doubleTopBottomTolerance,
+    settings.enablePrecisionSniper,
+    settings.precisionSniperPreset,
+    settings.precisionSniperGradeFilter,
+    settings.precisionSniperMinScore,
+    settings.precisionSniperHideC,
     settings.enablePatternTrades,
     settings.enabledPatterns,
     settings.channelLookback,
@@ -2005,6 +2015,36 @@ export default function TerminalHome() {
                       )}
                     </span>
                     <span>9. Double Top/Bottom (M&amp;W)</span>
+                  </button>
+
+                  {/* 10. Precision Sniper Toggle */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        enablePrecisionSniper: !prev.enablePrecisionSniper,
+                      }))
+                    }
+                    className={`flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-bold border transition ${
+                      settings.enablePrecisionSniper
+                        ? "bg-[#F59E0B]/15 border-[#F59E0B]/50 text-[#FBBF24]"
+                        : "bg-[#141824] border-[#1F2430] text-[#64748B] hover:text-[#94A3B8]"
+                    }`}
+                    title="Aktifkan/Nonaktifkan Indikator Precision Sniper [WillyAlgoTrader]"
+                  >
+                    <span
+                      className={`flex h-3 w-3 items-center justify-center rounded-sm border ${
+                        settings.enablePrecisionSniper
+                          ? "border-[#FBBF24] bg-[#FBBF24]"
+                          : "border-[#475569] bg-transparent"
+                      }`}
+                    >
+                      {settings.enablePrecisionSniper && (
+                        <Check className="h-2.5 w-2.5 text-[#090A0F] stroke-[3]" />
+                      )}
+                    </span>
+                    <span>10. Precision Sniper 🎯</span>
                   </button>
                 </div>
 

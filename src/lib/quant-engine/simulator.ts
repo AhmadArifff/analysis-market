@@ -31,6 +31,12 @@ import {
   ChartPatternId,
   getDefaultEnabledPatterns,
 } from "./chartPatterns";
+import {
+  evaluatePrecisionSniper,
+  PrecisionSniperSignal,
+  PrecisionSniperPreset,
+  PrecisionSniperGradeFilter,
+} from "./precisionSniper";
 
 export type TradeDirectionFilter = "AUTO" | "LONG" | "SHORT" | "ALL";
 
@@ -39,7 +45,8 @@ export type TriggerCategory =
   | "DOUBLE_TOP_BOTTOM"
   | "PARALLEL_CHANNEL"
   | "TREND_RUNNER"
-  | "CHART_PATTERN";
+  | "CHART_PATTERN"
+  | "PRECISION_SNIPER";
 
 export interface ActivePosition {
   trade_id: number;
@@ -97,6 +104,7 @@ export interface SimulationStepResult {
   activeChannel?: ParallelChannel | null;
   channelSignal?: ChannelSignalType;
   detectedPattern?: DetectedChartPattern | null;
+  precisionSniperSignal?: PrecisionSniperSignal | null;
   adxValue?: number;
   currentBalance?: number;
   isLiquidated?: boolean;
@@ -194,6 +202,13 @@ export interface StrategySchemaConfig {
   enabledPatterns?: Record<ChartPatternId, boolean>;
   channelLookback?: number;
   channelAnchorMode?: "SWING_HIGHLOW" | "REGRESSION";
+
+  // Precision Sniper [WillyAlgoTrader v2.1.0]
+  enablePrecisionSniper?: boolean;
+  precisionSniperPreset?: PrecisionSniperPreset;
+  precisionSniperGradeFilter?: PrecisionSniperGradeFilter;
+  precisionSniperMinScore?: number;
+  precisionSniperHideC?: boolean;
 
   // Institutional Risk Protections
   atrBufferMultiplier?: number; // e.g. 0.50 (default: 0.50x ATR, protecting from wick noise)
@@ -912,6 +927,60 @@ export function stepReplaySimulation(
     }
   }
 
+  // 8. Precision Sniper Indicator [WillyAlgoTrader v2.1.0]
+  let sniperSignalResult: PrecisionSniperSignal | null = null;
+  if (schema.enablePrecisionSniper) {
+    sniperSignalResult = evaluatePrecisionSniper(allCandles, currentIndex, {
+      preset: schema.precisionSniperPreset || "Default",
+      timeframe,
+      gradeFilter: schema.precisionSniperGradeFilter || "All",
+      minScore: schema.precisionSniperMinScore || 5,
+      hideC: schema.precisionSniperHideC !== false,
+      structureInput: true,
+      swingLookback: 10,
+      tp1R: 1.0,
+      tp2R: effectiveRR || 2.0,
+      tp3R: 3.0,
+    });
+
+    if (sniperSignalResult.signal !== "NONE" && !activePos) {
+      let allowSniper = false;
+      if (sniperSignalResult.signal === "BUY") {
+        allowSniper = directionFilter === "LONG" || directionFilter === "ALL" || directionFilter === "AUTO";
+      } else if (sniperSignalResult.signal === "SELL") {
+        allowSniper = directionFilter === "SHORT" || directionFilter === "ALL" || directionFilter === "AUTO";
+      }
+
+      if (allowSniper) {
+        if (isCoolingDown) {
+          alertMessage = `⏳ [JEDA COOLDOWN] Sinyal Precision Sniper ${sniperSignalResult.signal} [${sniperSignalResult.grade}] dilewati. Menunggu ${cooldownRemaining} bar jeda setelah Stop Loss.`;
+        } else {
+          const effectiveLot = resolveTradeLot(sniperSignalResult.entry_px, sniperSignalResult.sl_px);
+          const targetTP = effectiveRR >= 2.5 ? sniperSignalResult.tp3_px : effectiveRR >= 1.5 ? sniperSignalResult.tp2_px : sniperSignalResult.tp1_px;
+
+          activePos = {
+            trade_id: Date.now() + Math.floor(Math.random() * 1000),
+            symbol,
+            side: sniperSignalResult.signal === "BUY" ? "LONG" : "SHORT",
+            entry_time: currentBar.time,
+            entry_index: currentIndex,
+            entry_px: fmtPrice(sniperSignalResult.entry_px),
+            sl_px: fmtPrice(sniperSignalResult.sl_px),
+            tp_px: fmtPrice(targetTP),
+            confluence_score: Math.round(sniperSignalResult.scoreRatio * 100),
+            swept_pool_price: sniperSignalResult.sl_px,
+            setup_type: `PRECISION_SNIPER_${sniperSignalResult.signal} [${sniperSignalResult.grade}]`,
+            lot_size: effectiveLot,
+            trigger_category: "PRECISION_SNIPER",
+            trigger_reason: sniperSignalResult.trigger_reason,
+          };
+
+          alertMessage = `🎯 PRECISION SNIPER [${sniperSignalResult.grade}]! ${sniperSignalResult.signal} @ $${activePos.entry_px} | Score: ${sniperSignalResult.score.toFixed(1)}/${sniperSignalResult.scoreMax} | SL: $${activePos.sl_px}, TP: $${activePos.tp_px} | Lot: ${effectiveLot}${useDynamicLot ? ` (Auto Risk ${riskPerTradePct}%)` : ""} | ${sniperSignalResult.origin} SL`;
+        }
+      }
+    }
+  }
+
   return {
     closedTrade,
     newPosition: activePos,
@@ -922,6 +991,7 @@ export function stepReplaySimulation(
     activeChannel: enableParallelChannel ? activeChannel : null,
     channelSignal: enableParallelChannel ? channelSignal : "NONE",
     detectedPattern: enablePatternTrades ? detectedPattern : null,
+    precisionSniperSignal: sniperSignalResult,
     adxValue: round2(currentADX),
     currentBalance: runningBalance,
     isLiquidated: runningBalance <= 0,
